@@ -1,0 +1,43 @@
+{
+  "name": "school-erp-server",
+  "version": "1.0.0",
+  "description": "School ERP Backend API",
+  "main": "dist/app.js",
+  "scripts": {
+    "dev": "nodemon --exec ts-node src/app.ts",
+    "build": "tsc",
+    "start": "node dist/app.js",
+    "db": "ts-node src/database/runner.ts all",
+    "db:tables": "ts-node src/database/runner.ts tables",
+    "db:views": "ts-node src/database/runner.ts views",
+    "db:procedures": "ts-node src/database/runner.ts procedures",
+    "db:seeders": "ts-node src/database/runner.ts seeders",
+    "db:status": "ts-node src/database/runner.ts status"
+  },
+  "keywords": ["erp", "school", "typescript", "express", "postgresql"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-validator": "^7.3.1",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.17.1",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.0.9",
+    "@types/pg": "^8.16.0",
+    "@types/uuid": "^10.0.0",
+    "nodemon": "^3.1.11",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
