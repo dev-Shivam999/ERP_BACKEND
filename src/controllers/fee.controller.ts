@@ -770,27 +770,10 @@ export const updateFeeStructures = async (req: Request, res: Response): Promise<
                 if (!struct.id) continue;
 
                 // Update the structure
-                const updateRes = await client.query(
-                    `UPDATE fee_structures SET amount = $1 WHERE id = $2 RETURNING class_id, fee_type_id`,
+                await client.query(
+                    `UPDATE fee_structures SET amount = $1 WHERE id = $2`,
                     [struct.amount, struct.id]
                 );
-
-                if (updateRes.rows.length > 0) {
-                    const { class_id, fee_type_id } = updateRes.rows[0];
-
-                    // Check if this is the "Tuition Fee" type to sync with classes table
-                    const typeRes = await client.query(
-                        `SELECT name FROM fee_types WHERE id = $1`,
-                        [fee_type_id]
-                    );
-
-                    if (typeRes.rows.length > 0 && typeRes.rows[0].name.toLowerCase().includes('tuition')) {
-                        await client.query(
-                            `UPDATE classes SET monthly_fee_amount = $1 WHERE id = $2`,
-                            [struct.amount, class_id]
-                        );
-                    }
-                }
             }
         });
 

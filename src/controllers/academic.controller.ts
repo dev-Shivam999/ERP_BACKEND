@@ -23,13 +23,13 @@ export const getAllClasses = async (req: Request, res: Response): Promise<void> 
 export const createClass = async (req: Request, res: Response): Promise<void> => {
     try {
         const schoolId = req.user?.schoolId;
-        const { name, numericValue, displayOrder, monthlyFeeAmount } = req.body;
+        const { name, numericValue, displayOrder } = req.body;
 
         const result = await query(
-            `INSERT INTO classes (school_id, name, numeric_value, display_order, monthly_fee_amount)
-             VALUES ($1, $2, $3, $4, $5)
+            `INSERT INTO classes (school_id, name, numeric_value, display_order)
+             VALUES ($1, $2, $3, $4)
              RETURNING *`,
-            [schoolId, name, numericValue, displayOrder || numericValue, monthlyFeeAmount || 0]
+            [schoolId, name, numericValue, displayOrder || numericValue]
         );
 
         successResponse(res, 'Class created successfully', result.rows[0], 201);
@@ -44,14 +44,14 @@ export const updateClass = async (req: Request, res: Response): Promise<void> =>
     try {
         const { id } = req.params;
         const schoolId = req.user?.schoolId;
-        const { name, numericValue, displayOrder, monthlyFeeAmount } = req.body;
+        const { name, numericValue, displayOrder } = req.body;
 
         const result = await query(
             `UPDATE classes 
-             SET name = $1, numeric_value = $2, display_order = $3, monthly_fee_amount = $4, updated_at = CURRENT_TIMESTAMP
-             WHERE id = $5 AND school_id = $6
+             SET name = $1, numeric_value = $2, display_order = $3, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $4 AND school_id = $5
              RETURNING *`,
-            [name, numericValue, displayOrder || numericValue, monthlyFeeAmount || 0, id, schoolId]
+            [name, numericValue, displayOrder || numericValue, id, schoolId]
         );
 
         if (result.rowCount === 0) {
