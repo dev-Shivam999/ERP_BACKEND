@@ -808,7 +808,13 @@ export const getFeeMetadata = async (req: Request, res: Response): Promise<void>
         const schoolId = req.user?.schoolId;
 
         const classes = await query(
-            'SELECT id, name FROM classes WHERE school_id = $1 ORDER BY numeric_value ASC',
+            `SELECT c.id, c.name, 
+                    COALESCE(json_agg(json_build_object('id', s.id, 'name', s.name)) FILTER (WHERE s.id IS NOT NULL), '[]') as sections
+             FROM classes c
+             LEFT JOIN sections s ON s.class_id = c.id
+             WHERE c.school_id = $1
+             GROUP BY c.id, c.name, c.numeric_value
+             ORDER BY c.numeric_value ASC`,
             [schoolId]
         );
 

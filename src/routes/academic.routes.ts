@@ -25,4 +25,10 @@ router.get('/sections/:classId', academicController.getSectionsByClass);
 // POST /api/academic/sections - Create new section
 router.post('/sections', managementAccess, academicController.createSection);
 
+// GET /api/academic/subjects - Get all subjects
+router.get('/subjects', academicController.getAllSubjects);
+
+// POST /api/academic/subjects - Create new subject
+router.post('/subjects', managementAccess, academicController.createSubject);
+
 export default router;

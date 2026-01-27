@@ -5,16 +5,19 @@ import { config, testConnection } from './config';
 import { notFoundHandler, errorHandler } from './middleware';
 
 // Import routes
-import authRoutes from './routes/auth.routes.js';
-import studentRoutes from './routes/student.routes.js';
-import attendanceRoutes from './routes/attendance.routes.js';
-import feeRoutes from './routes/fee.routes.js';
-import dashboardRoutes from './routes/dashboard.routes.js';
-import teacherRoutes from './routes/teacher.routes.js';
-import examRoutes from './routes/exam.routes.js';
-import calendarRoutes from './routes/calendar.routes.js';
-import academicRoutes from './routes/academic.routes.js';
-import installmentRoutes from './routes/installment.routes.js';
+import authRoutes from './routes/auth.routes';
+import studentRoutes from './routes/student.routes';
+import attendanceRoutes from './routes/attendance.routes';
+import feeRoutes from './routes/fee.routes';
+import dashboardRoutes from './routes/dashboard.routes';
+import teacherRoutes from './routes/teacher.routes';
+import examRoutes from './routes/exam.routes';
+import calendarRoutes from './routes/calendar.routes';
+import academicRoutes from './routes/academic.routes';
+import installmentRoutes from './routes/installment.routes';
+import resultRoutes from './routes/result.routes';
+import homeworkRoutes from './routes/homework.routes';
+import payrollRoutes from './routes/payroll.routes';
 
 const app: Application = express();
 
@@ -37,7 +40,6 @@ app.get('/health', (req, res) => {
 });
 
 // API Routes
-
 app.use('/api/auth', authRoutes);
 app.use('/api/students', studentRoutes);
 app.use('/api/attendance', attendanceRoutes);
@@ -48,6 +50,9 @@ app.use('/api/exams', examRoutes);
 app.use('/api/calendar', calendarRoutes);
 app.use('/api/academic', academicRoutes);
 app.use('/api/installments', installmentRoutes);
+app.use('/api/results', resultRoutes);
+app.use('/api/homework', homeworkRoutes);
+app.use('/api/payroll', payrollRoutes);
 
 // Error handling
 app.use(notFoundHandler);

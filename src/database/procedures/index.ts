@@ -99,6 +99,7 @@ RETURNS TABLE(success BOOLEAN, message TEXT, absent_count INTEGER) AS $$
 DECLARE
   v_student RECORD;
   v_status attendance_status;
+  v_status_text TEXT;
   v_absent_count INTEGER := 0;
 BEGIN
   FOR v_student IN 
@@ -109,22 +110,26 @@ BEGIN
       AND s.section_id = p_section_id 
       AND s.status = 'active'
   LOOP
-    v_status := COALESCE((p_attendance->>(v_student.student_id::TEXT))::attendance_status, 'absent');
+    v_status_text := p_attendance->>(v_student.student_id::TEXT);
     
-    INSERT INTO student_attendance (student_id, class_id, section_id, date, status, marked_by)
-    VALUES (v_student.student_id, p_class_id, p_section_id, p_date, v_status, p_marked_by)
-    ON CONFLICT (student_id, date) 
-    DO UPDATE SET status = v_status, marked_by = p_marked_by, marked_at = CURRENT_TIMESTAMP;
-    
-    IF v_status = 'absent' THEN
-      v_absent_count := v_absent_count + 1;
-      -- Create notification for absent student's parent
-      INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, target_ids, created_by)
-      SELECT u.school_id, 'Attendance Alert', 
-             'Your child was marked absent on ' || p_date::TEXT,
-             'attendance', 'high', 'individual', 
-             jsonb_build_array(v_student.user_id), p_marked_by
-      FROM users u WHERE u.id = v_student.user_id;
+    IF v_status_text IS NOT NULL THEN
+        v_status := v_status_text::attendance_status;
+        
+        INSERT INTO student_attendance (student_id, class_id, section_id, date, status, marked_by)
+        VALUES (v_student.student_id, p_class_id, p_section_id, p_date, v_status, p_marked_by)
+        ON CONFLICT (student_id, date) 
+        DO UPDATE SET status = v_status, marked_by = p_marked_by, marked_at = CURRENT_TIMESTAMP;
+        
+        IF v_status = 'absent' THEN
+          v_absent_count := v_absent_count + 1;
+          -- Create notification for absent student's parent
+          INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, target_ids, created_by)
+          SELECT u.school_id, 'Attendance Alert', 
+                 'Your child was marked absent on ' || p_date::TEXT,
+                 'attendance', 'high', 'individual', 
+                 jsonb_build_array(v_student.user_id), p_marked_by
+          FROM users u WHERE u.id = v_student.user_id;
+        END IF;
     END IF;
   END LOOP;
   

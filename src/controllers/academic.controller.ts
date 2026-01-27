@@ -140,3 +140,40 @@ export const createSection = async (req: Request, res: Response): Promise<void> 
         errorResponse(res, 'Failed to create section', 500);
     }
 };
+
+// Get all subjects
+export const getAllSubjects = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const schoolId = req.user?.schoolId;
+
+        const result = await query(
+            `SELECT id, name, code, is_optional FROM subjects WHERE school_id = $1 ORDER BY name`,
+            [schoolId]
+        );
+
+        successResponse(res, 'Subjects fetched successfully', result.rows);
+    } catch (error) {
+        console.error('Get subjects error:', error);
+        errorResponse(res, 'Failed to fetch subjects', 500);
+    }
+};
+
+// Create new subject
+export const createSubject = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const schoolId = req.user?.schoolId;
+        const { name, code, isOptional } = req.body;
+
+        const result = await query(
+            `INSERT INTO subjects (school_id, name, code, is_optional)
+             VALUES ($1, $2, $3, $4)
+             RETURNING id, name, code, is_optional`,
+            [schoolId, name, code || name.substring(0, 3).toUpperCase(), isOptional || false]
+        );
+
+        successResponse(res, 'Subject created successfully', result.rows[0], 201);
+    } catch (error) {
+        console.error('Create subject error:', error);
+        errorResponse(res, 'Failed to create subject', 500);
+    }
+};

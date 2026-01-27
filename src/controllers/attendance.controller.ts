@@ -13,10 +13,16 @@ export const markAttendance = async (req: Request, res: Response): Promise<void>
             return;
         }
 
+        // Transform attendance array to object for SP: { student_id: status }
+        const attendanceMap = attendance.reduce((acc: any, curr: any) => {
+            acc[curr.student_id] = curr.status;
+            return acc;
+        }, {});
+
         // Use stored procedure for bulk attendance
         const result = await query(
             `SELECT * FROM sp_mark_class_attendance($1, $2, $3, $4, $5)`,
-            [classId, sectionId, date, JSON.stringify(attendance), userId]
+            [classId, sectionId, date, JSON.stringify(attendanceMap), userId]
         );
 
         // Send notifications for absent students (in-app)
@@ -232,6 +238,98 @@ export const getMonthlyReport = async (req: Request, res: Response): Promise<voi
     } catch (error) {
         console.error('Get monthly report error:', error);
         errorResponse(res, 'Failed to fetch report', 500);
+    }
+};
+
+// Get teacher's assigned classes
+export const getTeacherClasses = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const userId = req.user?.userId;
+        const schoolId = req.user?.schoolId;
+        const role = req.user?.role; // Assuming role is available in req.user
+
+        let queryText = '';
+        let queryParams: any[] = [];
+
+        if (role === 'admin') {
+            // Admin sees all classes
+            queryText = `
+                SELECT 
+                    c.id as class_id, c.name as class_name,
+                    s.id as section_id, s.name as section_name,
+                    'All Subjects' as subject_name,
+                    COUNT(st.id) as student_count
+                FROM classes c
+                JOIN sections s ON s.class_id = c.id
+                LEFT JOIN students st ON st.current_class_id = c.id AND st.section_id = s.id AND st.status = 'active'
+                WHERE c.school_id = $1
+                GROUP BY c.id, c.name, s.id, s.name
+                ORDER BY c.numeric_value, s.name`;
+            queryParams = [schoolId];
+        } else {
+            // Teachers see assigned classes
+            queryText = `
+                SELECT DISTINCT 
+                    c.id as class_id, c.name as class_name,
+                    s.id as section_id, s.name as section_name,
+                    sub.name as subject_name,
+                    COUNT(st.id) as student_count
+                FROM teacher_class_assignments tca
+                JOIN classes c ON tca.class_id = c.id
+                JOIN sections s ON tca.section_id = s.id
+                JOIN subjects sub ON tca.subject_id = sub.id
+                LEFT JOIN students st ON st.current_class_id = c.id AND st.section_id = s.id AND st.status = 'active'
+                WHERE tca.teacher_id = (SELECT id FROM teachers WHERE user_id = $1)
+                  AND c.school_id = $2
+                GROUP BY c.id, c.name, s.id, s.name, sub.name
+                ORDER BY c.numeric_value, s.name`;
+            queryParams = [userId, schoolId];
+        }
+
+        const result = await query(queryText, queryParams);
+
+        successResponse(res, 'Classes fetched successfully', result.rows);
+    } catch (error) {
+        console.error('Get classes error:', error);
+        errorResponse(res, 'Failed to fetch classes', 500);
+    }
+};
+
+// Update student roll number (teacher access)
+export const updateStudentRollNumber = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { studentId } = req.params;
+        const { rollNumber } = req.body;
+        const userId = req.user?.userId;
+
+        // Check if teacher has access to this student's class
+        const accessCheck = await query(
+            `SELECT s.id 
+             FROM students s
+             JOIN teacher_class_assignments tca ON s.current_class_id = tca.class_id AND s.section_id = tca.section_id
+             WHERE s.id = $1 AND tca.teacher_id = (SELECT id FROM teachers WHERE user_id = $2)`,
+            [studentId, userId]
+        );
+
+        if (accessCheck.rows.length === 0) {
+            errorResponse(res, 'Access denied. You can only update roll numbers for your assigned classes.', 403);
+            return;
+        }
+
+        const result = await query(
+            `UPDATE students SET roll_number = $1 WHERE id = $2 RETURNING *`,
+            [rollNumber, studentId]
+        );
+
+        if (result.rowCount === 0) {
+            errorResponse(res, 'Student not found', 404);
+            return;
+        }
+
+        successResponse(res, 'Roll number updated successfully', result.rows[0]);
+    } catch (error) {
+        console.error('Update roll number error:', error);
+        errorResponse(res, 'Failed to update roll number', 500);
     }
 };
 

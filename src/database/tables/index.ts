@@ -186,31 +186,6 @@ CREATE TABLE IF NOT EXISTS student_parents (
   UNIQUE(student_id, parent_id)
 );
 
-CREATE TABLE IF NOT EXISTS student_documents (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
-  document_type document_type NOT NULL,
-  document_number VARCHAR(100),
-  document_name VARCHAR(255) NOT NULL,
-  document_url TEXT NOT NULL,
-  is_verified BOOLEAN DEFAULT false,
-  verified_by UUID REFERENCES users(id),
-  verified_at TIMESTAMP WITH TIME ZONE,
-  uploaded_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS student_promotions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
-  from_class_id UUID NOT NULL REFERENCES classes(id),
-  to_class_id UUID NOT NULL REFERENCES classes(id),
-  from_section_id UUID REFERENCES sections(id),
-  to_section_id UUID REFERENCES sections(id),
-  academic_year VARCHAR(20) NOT NULL,
-  promoted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  promoted_by UUID NOT NULL REFERENCES users(id)
-);
-
 CREATE INDEX idx_students_admission_number ON students(admission_number);
 CREATE INDEX idx_students_class_section ON students(current_class_id, section_id);
 CREATE INDEX idx_students_category ON students(category);
@@ -308,24 +283,10 @@ CREATE TABLE IF NOT EXISTS fee_payments (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS fee_discounts (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
-  fee_type_id UUID NOT NULL REFERENCES fee_types(id),
-  discount_type VARCHAR(20) NOT NULL,
-  discount_value DECIMAL(10, 2) NOT NULL,
-  reason discount_reason NOT NULL,
-  approved_by UUID NOT NULL REFERENCES users(id),
-  valid_from DATE NOT NULL,
-  valid_to DATE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
 CREATE INDEX idx_student_fees_student ON student_fees(student_id);
 CREATE INDEX idx_student_fees_status ON student_fees(status);
 CREATE INDEX idx_fee_payments_receipt ON fee_payments(receipt_number);
 `;
-
 
 // ============================================
 // 7. TEACHERS
@@ -440,159 +401,24 @@ CREATE TABLE IF NOT EXISTS report_cards (
 `;
 
 // ============================================
-// 9. SALARY & LEAVE
+// 9. NOTIFICATIONS
 // ============================================
-export const salary = () => `
-CREATE TYPE leave_type AS ENUM ('casual', 'sick', 'earned', 'maternity', 'paternity', 'unpaid');
-CREATE TYPE leave_status AS ENUM ('pending', 'approved', 'rejected');
-CREATE TYPE salary_status AS ENUM ('pending', 'processed', 'paid');
-
-CREATE TABLE IF NOT EXISTS salary_structures (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  teacher_id UUID NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
-  basic_salary DECIMAL(10, 2) NOT NULL,
-  hra_percentage DECIMAL(5, 2) DEFAULT 20,
-  da_percentage DECIMAL(5, 2) DEFAULT 10,
-  transport_allowance DECIMAL(10, 2) DEFAULT 0,
-  special_allowance DECIMAL(10, 2) DEFAULT 0,
-  pf_percentage DECIMAL(5, 2) DEFAULT 12,
-  professional_tax DECIMAL(10, 2) DEFAULT 200,
-  effective_from DATE NOT NULL DEFAULT CURRENT_DATE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS salary_slips (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  teacher_id UUID NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
-  month INTEGER NOT NULL,
-  year INTEGER NOT NULL,
-  working_days INTEGER NOT NULL,
-  present_days INTEGER NOT NULL,
-  leave_days INTEGER DEFAULT 0,
-  basic_salary DECIMAL(10, 2) NOT NULL,
-  hra DECIMAL(10, 2) NOT NULL,
-  da DECIMAL(10, 2) NOT NULL,
-  transport_allowance DECIMAL(10, 2) DEFAULT 0,
-  special_allowance DECIMAL(10, 2) DEFAULT 0,
-  gross_salary DECIMAL(10, 2) NOT NULL,
-  pf_deduction DECIMAL(10, 2) NOT NULL,
-  professional_tax DECIMAL(10, 2) NOT NULL,
-  other_deductions DECIMAL(10, 2) DEFAULT 0,
-  total_deductions DECIMAL(10, 2) NOT NULL,
-  net_salary DECIMAL(10, 2) NOT NULL,
-  payment_date DATE,
-  payment_mode payment_mode,
-  status salary_status DEFAULT 'pending',
-  generated_by UUID NOT NULL REFERENCES users(id),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(teacher_id, month, year)
-);
-
-CREATE TABLE IF NOT EXISTS leave_applications (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  applicant_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  leave_type leave_type NOT NULL,
-  from_date DATE NOT NULL,
-  to_date DATE NOT NULL,
-  reason TEXT NOT NULL,
-  status leave_status DEFAULT 'pending',
-  approved_by UUID REFERENCES users(id),
-  approved_at TIMESTAMP WITH TIME ZONE,
-  remarks TEXT,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-`;
-
 // ============================================
-// 10. HOLIDAYS & EVENTS
-// ============================================
-export const holidaysEvents = () => `
-CREATE TYPE holiday_type AS ENUM ('national', 'festival', 'vacation', 'sudden', 'other');
-CREATE TYPE event_type AS ENUM ('annual_day', 'sports_day', 'trip', 'parent_meeting', 'other');
-
-CREATE TABLE IF NOT EXISTS holidays (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
-  academic_year_id UUID NOT NULL REFERENCES academic_years(id),
-  title VARCHAR(255) NOT NULL,
-  holiday_type holiday_type NOT NULL,
-  start_date DATE NOT NULL,
-  end_date DATE NOT NULL,
-  description TEXT,
-  is_sudden BOOLEAN DEFAULT false,
-  declared_by UUID NOT NULL REFERENCES users(id),
-  notify_all BOOLEAN DEFAULT true,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS events (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
-  title VARCHAR(255) NOT NULL,
-  description TEXT,
-  event_type event_type NOT NULL,
-  start_datetime TIMESTAMP WITH TIME ZONE NOT NULL,
-  end_datetime TIMESTAMP WITH TIME ZONE NOT NULL,
-  location VARCHAR(255),
-  for_classes JSONB,
-  created_by UUID NOT NULL REFERENCES users(id),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-`;
-
-// ============================================
-// 11. TIMETABLE & HOMEWORK
-// ============================================
-export const timetableHomework = () => `
-CREATE TYPE day_of_week AS ENUM ('monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday');
-
-CREATE TABLE IF NOT EXISTS timetable_periods (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
-  period_number INTEGER NOT NULL,
-  start_time TIME NOT NULL,
-  end_time TIME NOT NULL,
-  is_break BOOLEAN DEFAULT false,
-  break_name VARCHAR(50),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(school_id, period_number)
-);
-
-CREATE TABLE IF NOT EXISTS timetable_entries (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
-  section_id UUID NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
-  period_id UUID NOT NULL REFERENCES timetable_periods(id) ON DELETE CASCADE,
-  subject_id UUID REFERENCES subjects(id),
-  teacher_id UUID REFERENCES teachers(id),
-  day_of_week day_of_week NOT NULL,
-  academic_year_id UUID NOT NULL REFERENCES academic_years(id),
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE(class_id, section_id, period_id, day_of_week, academic_year_id)
-);
-
-CREATE TABLE IF NOT EXISTS homework (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  class_id UUID NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
-  section_id UUID NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
-  subject_id UUID NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
-  teacher_id UUID NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
-  title VARCHAR(255) NOT NULL,
-  description TEXT NOT NULL,
-  attachment_url TEXT,
-  assigned_date DATE NOT NULL DEFAULT CURRENT_DATE,
-  due_date DATE NOT NULL,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-`;
-
-// ============================================
-// 12. NOTIFICATIONS
+// 9. NOTIFICATIONS
 // ============================================
 export const notifications = () => `
-CREATE TYPE notification_type AS ENUM ('attendance', 'fee_reminder', 'fee_receipt', 'result', 'holiday', 'event', 'homework', 'general');
-CREATE TYPE notification_priority AS ENUM ('low', 'normal', 'high', 'urgent');
-CREATE TYPE notification_target AS ENUM ('all', 'class', 'section', 'individual', 'role');
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'notification_type') THEN
+        CREATE TYPE notification_type AS ENUM ('attendance', 'fee_reminder', 'fee_receipt', 'result', 'holiday', 'event', 'homework', 'general');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'notification_priority') THEN
+        CREATE TYPE notification_priority AS ENUM ('low', 'normal', 'high', 'urgent');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'notification_target') THEN
+        CREATE TYPE notification_target AS ENUM ('all', 'class', 'section', 'individual', 'role');
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS notifications (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -620,27 +446,214 @@ CREATE TABLE IF NOT EXISTS notification_recipients (
 `;
 
 // ============================================
+// 10. RESULTS & MARKS MANAGEMENT
+// ============================================
+export const resultsManagement = () => `
+CREATE TYPE result_status AS ENUM ('draft', 'published', 'archived');
+CREATE TYPE grade_type AS ENUM ('A+', 'A', 'B+', 'B', 'C+', 'C', 'D', 'F');
+
+CREATE TABLE IF NOT EXISTS result_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  exam_id UUID NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+  name VARCHAR(100) NOT NULL,
+  description TEXT,
+  status result_status DEFAULT 'draft',
+  published_at TIMESTAMP WITH TIME ZONE,
+  published_by UUID REFERENCES users(id),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS student_results (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  result_session_id UUID NOT NULL REFERENCES result_sessions(id) ON DELETE CASCADE,
+  student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  class_id UUID NOT NULL REFERENCES classes(id),
+  section_id UUID NOT NULL REFERENCES sections(id),
+  total_marks DECIMAL(6, 2) DEFAULT 0,
+  obtained_marks DECIMAL(6, 2) DEFAULT 0,
+  percentage DECIMAL(5, 2) DEFAULT 0,
+  grade grade_type,
+  rank INTEGER,
+  status result_status DEFAULT 'draft',
+  remarks TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(result_session_id, student_id)
+);
+
+CREATE TABLE IF NOT EXISTS subject_marks (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  student_result_id UUID NOT NULL REFERENCES student_results(id) ON DELETE CASCADE,
+  subject_id UUID NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+  max_marks DECIMAL(6, 2) NOT NULL,
+  obtained_marks DECIMAL(6, 2) NOT NULL DEFAULT 0,
+  grade grade_type,
+  remarks TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(student_result_id, subject_id)
+);
+
+CREATE TABLE IF NOT EXISTS result_notifications (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  result_session_id UUID NOT NULL REFERENCES result_sessions(id) ON DELETE CASCADE,
+  student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  notification_sent BOOLEAN DEFAULT false,
+  sent_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Indexes for performance
+CREATE INDEX idx_student_results_session ON student_results(result_session_id);
+CREATE INDEX idx_student_results_student ON student_results(student_id);
+CREATE INDEX idx_subject_marks_result ON subject_marks(student_result_id);
+CREATE INDEX idx_result_notifications_session ON result_notifications(result_session_id);
+`;
+
+// ============================================
+// 11. GRADE CALCULATION FUNCTIONS
+// ============================================
+// ============================================
+// 11. GRADE CALCULATION FUNCTIONS
+// ============================================
+export const gradeCalculationFunctions = () => `
+-- Function to calculate grade based on percentage
+CREATE OR REPLACE FUNCTION calculate_grade(percentage DECIMAL)
+RETURNS grade_type AS $$
+BEGIN
+  CASE 
+    WHEN percentage >= 90 THEN RETURN 'A+';
+    WHEN percentage >= 80 THEN RETURN 'A';
+    WHEN percentage >= 70 THEN RETURN 'B+';
+    WHEN percentage >= 60 THEN RETURN 'B';
+    WHEN percentage >= 50 THEN RETURN 'C+';
+    WHEN percentage >= 40 THEN RETURN 'C';
+    WHEN percentage >= 33 THEN RETURN 'D';
+    ELSE RETURN 'F';
+  END CASE;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to update student result totals
+CREATE OR REPLACE FUNCTION update_student_result_totals(student_result_uuid UUID)
+RETURNS VOID AS $$
+DECLARE
+  total_max DECIMAL(8, 2);
+  total_obtained DECIMAL(8, 2);
+  calc_percentage DECIMAL(5, 2);
+  calc_grade grade_type;
+BEGIN
+  -- Calculate totals from subject marks
+  SELECT 
+    COALESCE(SUM(max_marks), 0),
+    COALESCE(SUM(obtained_marks), 0)
+  INTO total_max, total_obtained
+  FROM subject_marks 
+  WHERE student_result_id = student_result_uuid;
+  
+  -- Calculate percentage
+  IF total_max > 0 THEN
+    calc_percentage := ROUND((total_obtained / total_max) * 100, 2);
+  ELSE
+    calc_percentage := 0;
+  END IF;
+  
+  -- Calculate grade
+  calc_grade := calculate_grade(calc_percentage);
+  
+  -- Update student result
+  UPDATE student_results 
+  SET 
+    total_marks = total_max,
+    obtained_marks = total_obtained,
+    percentage = calc_percentage,
+    grade = calc_grade,
+    updated_at = CURRENT_TIMESTAMP
+  WHERE id = student_result_uuid;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger to auto-update totals when subject marks change
+CREATE OR REPLACE FUNCTION trigger_update_result_totals()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    PERFORM update_student_result_totals(OLD.student_result_id);
+    RETURN OLD;
+  ELSE
+    PERFORM update_student_result_totals(NEW.student_result_id);
+    RETURN NEW;
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE TRIGGER subject_marks_update_totals
+  AFTER INSERT OR UPDATE OR DELETE ON subject_marks
+  FOR EACH ROW EXECUTE FUNCTION trigger_update_result_totals();
+`;
+
+// ============================================
+// 12. HOMEWORK
+// ============================================
+export const homework = () => `
+CREATE TABLE IF NOT EXISTS homework (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    class_id UUID NOT NULL REFERENCES classes(id),
+    section_id UUID NOT NULL REFERENCES sections(id),
+    subject_id UUID NOT NULL REFERENCES subjects(id),
+    teacher_id UUID NOT NULL REFERENCES teachers(id),
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    due_date DATE NOT NULL,
+    attachment_url TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS student_homework (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    homework_id UUID NOT NULL REFERENCES homework(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'submitted', 'late')),
+    submission_text TEXT,
+    submission_url TEXT,
+    submitted_at TIMESTAMP WITH TIME ZONE,
+    remarks TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(homework_id, student_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_homework_class_section ON homework(class_id, section_id);
+CREATE INDEX IF NOT EXISTS idx_homework_teacher ON homework(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_student_homework_student ON student_homework(student_id);
+`;
+
+// ============================================
 // MIGRATIONS & PATCHES
 // ============================================
 export const addBloodGroupToProfiles = () => `
 -- Ensure blood_group_type exists (it might if students table was created)
-DO $$ 
+DO $ 
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'blood_group_type') THEN
         CREATE TYPE blood_group_type AS ENUM ('A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-');
     END IF;
-END $$;
+END $;
 
 -- Add blood_group to user_profiles if missing
-DO $$ 
+DO $ 
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_profiles' AND column_name = 'blood_group') THEN
         ALTER TABLE user_profiles ADD COLUMN blood_group blood_group_type;
     END IF;
-END $$;
+END $;
 
 -- Optional: Move data if it exists in students (and then remove column)
-DO $$ 
+DO $ 
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'students' AND column_name = 'blood_group') THEN
         -- Transfer data
@@ -652,17 +665,67 @@ BEGIN
         -- Remove column from students
         ALTER TABLE students DROP COLUMN blood_group;
     END IF;
-END $$;
+END $;
 `;
 
 export const addPermissionsToUsers = () => `
 -- Add permissions to users if missing
-DO $$ 
+DO $ 
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'permissions') THEN
         ALTER TABLE users ADD COLUMN permissions JSONB DEFAULT '{}';
     END IF;
+END $;
+`;
+
+// ============================================
+// 13. HOMEWORK STATUS UPDATE
+// ============================================
+export const updateHomeworkStatusCheck = () => `
+DO $$
+DECLARE constraint_name text;
+BEGIN
+    -- Find existing check constraint on status column
+    SELECT conname INTO constraint_name
+    FROM pg_constraint
+    WHERE conrelid = 'student_homework'::regclass AND contype = 'c' AND conname LIKE '%status%';
+    
+    -- Drop it if found
+    IF constraint_name IS NOT NULL THEN
+        EXECUTE 'ALTER TABLE student_homework DROP CONSTRAINT ' || constraint_name;
+    END IF;
+    
+    -- Add new constraint with additional statuses
+    ALTER TABLE student_homework ADD CONSTRAINT student_homework_status_check 
+    CHECK (status IN ('pending', 'completed', 'submitted', 'late', 'not_completed', 'not_started'));
 END $$;
+`;
+
+// ============================================
+// 14. PAYROLL
+// ============================================
+export const payroll = () => `
+CREATE TABLE IF NOT EXISTS payroll (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    teacher_id UUID NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+    month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
+    year INTEGER NOT NULL,
+    basic_salary DECIMAL(10, 2) NOT NULL DEFAULT 0,
+    allowances DECIMAL(10, 2) DEFAULT 0,
+    deductions DECIMAL(10, 2) DEFAULT 0,
+    net_salary DECIMAL(10, 2) NOT NULL,
+    payment_date DATE,
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'hold')),
+    payslip_url TEXT,
+    remarks TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(teacher_id, month, year)
+);
+
+CREATE INDEX IF NOT EXISTS idx_payroll_teacher ON payroll(teacher_id);
+CREATE INDEX IF NOT EXISTS idx_payroll_period ON payroll(month, year);
 `;
 
 // ============================================
@@ -679,8 +742,10 @@ export const allTables = [
   { name: '06_fees', sql: fees },
   { name: '07_teachers', sql: teachers },
   { name: '08_exams', sql: exams },
-  { name: '09_salary', sql: salary },
-  { name: '10_holidays_events', sql: holidaysEvents },
-  { name: '11_timetable_homework', sql: timetableHomework },
-  { name: '12_notifications', sql: notifications },
+  { name: '09_notifications', sql: notifications },
+  { name: '10_results_management', sql: resultsManagement },
+  { name: '11_grade_calculation_functions', sql: gradeCalculationFunctions },
+  { name: '12_homework', sql: homework },
+  { name: '13_update_homework_status', sql: updateHomeworkStatusCheck },
+  { name: '14_payroll', sql: payroll },
 ];
