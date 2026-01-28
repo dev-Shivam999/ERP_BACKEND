@@ -140,6 +140,67 @@ export const getStudentAttendance = async (req: Request, res: Response): Promise
     }
 };
 
+// Get my attendance (for logged-in students)
+export const getMyAttendance = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const userId = req.user?.userId;
+        const { month, year } = req.query;
+
+        console.log('📅 getMyAttendance called for userId:', userId, 'month:', month, 'year:', year);
+
+        // Get student record from userId
+        const studentResult = await query(
+            'SELECT id FROM students WHERE user_id = $1',
+            [userId]
+        );
+
+        if (studentResult.rows.length === 0) {
+            errorResponse(res, 'Student profile not found', 404);
+            return;
+        }
+
+        const studentId = studentResult.rows[0].id;
+        console.log('👤 Student ID:', studentId);
+
+        let whereClause = 'WHERE sa.student_id = $1';
+        const params: any[] = [studentId];
+
+        if (month && year) {
+            whereClause += ` AND EXTRACT(MONTH FROM sa.date) = $2 AND EXTRACT(YEAR FROM sa.date) = $3`;
+            params.push(month, year);
+        }
+
+        const result = await query(
+            `SELECT sa.date, sa.status, sa.late_time, sa.remarks
+       FROM student_attendance sa
+       ${whereClause}
+       ORDER BY sa.date DESC`,
+            params
+        );
+
+        console.log('✅ Found attendance records:', result.rows.length);
+
+        // Calculate statistics
+        const stats = {
+            total: result.rows.length,
+            present: result.rows.filter(r => r.status === 'present').length,
+            absent: result.rows.filter(r => r.status === 'absent').length,
+            late: result.rows.filter(r => r.status === 'late').length,
+            halfDay: result.rows.filter(r => r.status === 'half_day').length,
+            percentage: 0,
+        };
+        stats.percentage = stats.total > 0 ? Math.round((stats.present / stats.total) * 100 * 100) / 100 : 0;
+
+        successResponse(res, 'Student attendance fetched', {
+            attendance: result.rows,
+            statistics: stats,
+        });
+    } catch (error) {
+        console.error('❌ Get my attendance error:', error);
+        errorResponse(res, 'Failed to fetch attendance', 500);
+    }
+};
+
 // Get attendance summary for a date
 export const getAttendanceSummary = async (req: Request, res: Response): Promise<void> => {
     try {

@@ -30,7 +30,10 @@ export const adminOnly = authorize('admin');
 export const managementAccess = authorize('admin', 'management');
 
 // Teacher access
-export const teacherAccess = authorize('admin', 'management', 'teacher');
+export const teacherAccess = (req: Request, res: Response, next: NextFunction): void => {
+    console.log('🔐 teacherAccess middleware - User:', req.user?.userId, 'Role:', req.user?.role);
+    authorize('admin', 'management', 'teacher')(req, res, next);
+};
 
 // Fee collector access
 export const feeCollectorAccess = authorize('admin', 'fee_collector');

@@ -446,3 +446,337 @@ export const publishResults = async (req: Request, res: Response): Promise<void>
         errorResponse(res, 'Failed to publish results', 500);
     }
 };
+
+// Get active exams (for students/teachers)
+export const getActiveExams = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const userId = req.user?.userId;
+        const schoolId = req.user?.schoolId;
+        const role = req.user?.role;
+
+        let result;
+
+        if (role === 'student') {
+            // Get student's class
+            const studentRes = await query(
+                `SELECT current_class_id FROM students WHERE user_id = $1`,
+                [userId]
+            );
+
+            if (studentRes.rows.length === 0) {
+                errorResponse(res, 'Student record not found', 404);
+                return;
+            }
+
+            const classId = studentRes.rows[0].current_class_id;
+
+            // Fetch active published exams for this class with schedule
+            // "Active" means published and end_date is today or in future.
+            result = await query(
+                `SELECT 
+                    e.id, e.name, e.exam_type, e.start_date, e.end_date,
+                    json_agg(
+                        json_build_object(
+                            'subject_name', s.name,
+                            'exam_date', es.exam_date,
+                            'start_time', es.start_time,
+                            'end_time', es.end_time,
+                            'max_marks', es.max_marks,
+                            'passing_marks', es.passing_marks
+                        ) ORDER BY es.exam_date, es.start_time
+                    ) as schedule
+                 FROM exams e
+                 JOIN exam_schedules es ON e.id = es.exam_id
+                 JOIN subjects s ON es.subject_id = s.id
+                 WHERE e.school_id = $1 
+                   AND e.is_published = true 
+                   AND e.end_date >= CURRENT_DATE
+                   AND es.class_id = $2
+                 GROUP BY e.id, e.name, e.exam_type, e.start_date, e.end_date
+                 ORDER BY e.start_date ASC`,
+                [schoolId, classId]
+            );
+
+        } else {
+            // For teachers/admins/management -> Show all active exams
+            result = await query(
+                `SELECT 
+                    e.id, e.name, e.exam_type, e.start_date, e.end_date,
+                    (
+                        SELECT json_agg(
+                            json_build_object(
+                                'class_name', c.name,
+                                'subject_name', s.name,
+                                'exam_date', es.exam_date,
+                                'start_time', es.start_time,
+                                'end_time', es.end_time
+                            ) ORDER BY es.exam_date, es.start_time
+                        )
+                        FROM exam_schedules es
+                        JOIN classes c ON es.class_id = c.id
+                        JOIN subjects s ON es.subject_id = s.id
+                        WHERE es.exam_id = e.id
+                    ) as schedule
+                 FROM exams e
+                 WHERE e.school_id = $1 
+                   AND e.is_published = true
+                   AND e.end_date >= CURRENT_DATE
+                 ORDER BY e.start_date ASC`,
+                [schoolId]
+            );
+        }
+
+        successResponse(res, 'Active exams fetched successfully', result.rows);
+    } catch (error) {
+        console.error('Get active exams error:', error);
+        errorResponse(res, 'Failed to fetch active exams', 500);
+    }
+};
+
+// Generate Admit Cards
+export const generateAdmitCards = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params; // Exam ID
+        const { checkFees, requiredFeeTypes } = req.body;
+        const schoolId = req.user?.schoolId;
+        const userId = req.user?.userId;
+
+        // 1. Get Exam Details
+        const examRes = await query(
+            `SELECT * FROM exams WHERE id = $1 AND school_id = $2`,
+            [id, schoolId]
+        );
+
+        if (examRes.rows.length === 0) {
+            errorResponse(res, 'Exam not found', 404);
+            return;
+        }
+
+        const exam = examRes.rows[0];
+
+        // 2. Get students involved in the exam (via exam_schedules -> classes)
+        const studentsRes = await query(
+            `SELECT DISTINCT s.id, s.user_id, s.current_class_id
+             FROM students s
+             JOIN exam_schedules es ON s.current_class_id = es.class_id
+             WHERE es.exam_id = $1 AND s.status = 'active'`,
+            [id]
+        );
+
+        const students = studentsRes.rows;
+        const eligibleStudents: string[] = [];
+
+        // 3. Filter eligible students
+        for (const student of students) {
+            let isEligible = true;
+
+            if (checkFees) {
+                // Check for pending fees
+                let feeQuery = `SELECT SUM(sf.amount_pending) as total_pending 
+                                FROM student_fees sf`;
+
+                const queryParams: any[] = [student.id];
+
+                if (requiredFeeTypes && Array.isArray(requiredFeeTypes) && requiredFeeTypes.length > 0) {
+                    // Check specific fee types
+                    feeQuery += ` JOIN fee_structures fs ON sf.fee_structure_id = fs.id
+                                   JOIN fee_types ft ON fs.fee_type_id = ft.id
+                                   WHERE sf.student_id = $1 
+                                   AND (ft.id::text = ANY($2) OR ft.name ILIKE ANY($2))`;
+                    queryParams.push(requiredFeeTypes);
+                } else {
+                    // Check all fees
+                    feeQuery += ` WHERE sf.student_id = $1`;
+                }
+
+                const feeRes = await query(feeQuery, queryParams);
+                const totalPending = parseFloat(feeRes.rows[0].total_pending || '0');
+
+                if (totalPending > 0) {
+                    isEligible = false;
+                }
+            }
+
+            if (isEligible) {
+                eligibleStudents.push(student.id);
+            }
+        }
+
+        // 4. Insert into admit_cards
+        if (eligibleStudents.length > 0) {
+            // Bulk insert or loop? Loop is safer for conflicts.
+            // Using transaction for atomic batch
+            await transaction(async (client) => {
+                for (const studentId of eligibleStudents) {
+                    await client.query(
+                        `INSERT INTO admit_cards (exam_id, student_id, status)
+                          VALUES ($1, $2, 'issued')
+                          ON CONFLICT (exam_id, student_id) 
+                          DO UPDATE SET generated_at = CURRENT_TIMESTAMP, status = 'issued'`,
+                        [id, studentId]
+                    );
+
+                    // Optional: Send Notification to Student
+                    // Notification logic here (omitted for brevity, can be added)
+                }
+            });
+        }
+
+        // Update exam to mark admit cards as published (optional flag)
+        await query(`UPDATE exams SET updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [id]);
+
+        successResponse(res, `Admit cards generated for ${eligibleStudents.length} students`, { count: eligibleStudents.length });
+
+    } catch (error) {
+        console.error('Generate admit cards error:', error);
+        errorResponse(res, 'Failed to generate admit cards', 500);
+    }
+};
+
+// Get Admit Card (Student Side)
+export const getAdmitCard = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params; // Exam ID
+        const userId = req.user?.userId;
+        const role = req.user?.role;
+
+        let studentId;
+
+        if (role === 'student') {
+            const studentRes = await query(`SELECT id FROM students WHERE user_id = $1`, [userId]);
+            if (studentRes.rows.length === 0) {
+                errorResponse(res, 'Student record not found', 404);
+                return;
+            }
+            studentId = studentRes.rows[0].id;
+        } else if (req.query.studentId) {
+            // Teachers/Admins can view by passing studentId
+            studentId = req.query.studentId;
+        } else {
+            errorResponse(res, 'Student ID required', 400);
+            return;
+        }
+
+        // Check if admit card is issued
+        const cardRes = await query(
+            `SELECT * FROM admit_cards WHERE exam_id = $1 AND student_id = $2 AND status = 'issued'`,
+            [id, studentId]
+        );
+
+        if (cardRes.rows.length === 0) {
+            errorResponse(res, 'Admit card not found or not issued yet', 404);
+            return;
+        }
+
+        const admitCard = cardRes.rows[0];
+
+        // Fetch Exam Details & Schedule
+        const examRes = await query(
+            `SELECT e.name as exam_name, e.start_date, e.end_date,
+                    s.admission_number, s.roll_number,
+                    up.first_name || ' ' || COALESCE(up.last_name, '') as student_name,
+                    c.name as class_name, sec.name as section_name,
+                    sch.name as school_name, sch.address as school_address, sch.logo_url as school_logo
+             FROM exams e
+             JOIN students s ON s.id = $2
+             JOIN users u ON s.user_id = u.id
+             JOIN user_profiles up ON u.id = up.user_id
+             JOIN classes c ON s.current_class_id = c.id
+             JOIN sections sec ON s.section_id = sec.id
+             JOIN schools sch ON e.school_id = sch.id
+             WHERE e.id = $1`,
+            [id, studentId]
+        );
+
+        const scheduleRes = await query(
+            `SELECT s.name as subject_name, es.exam_date, es.start_time, es.end_time
+             FROM exam_schedules es
+             JOIN subjects s ON es.subject_id = s.id
+             WHERE es.exam_id = $1 AND es.class_id = (SELECT current_class_id FROM students WHERE id = $2)
+             ORDER BY es.exam_date, es.start_time`,
+            [id, studentId]
+        );
+
+        successResponse(res, 'Admit card fetched', {
+            card: admitCard,
+            exam: examRes.rows[0],
+            schedule: scheduleRes.rows
+        });
+
+    } catch (error) {
+        console.error('Get admit card error:', error);
+        errorResponse(res, 'Failed to fetch admit card', 500);
+    }
+};
+
+// Manually Issue Admit Card
+export const issueAdmitCard = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params; // Exam ID
+        const { studentId } = req.body;
+
+        await query(
+            `INSERT INTO admit_cards (exam_id, student_id, status)
+              VALUES ($1, $2, 'issued')
+              ON CONFLICT (exam_id, student_id) 
+              DO UPDATE SET generated_at = CURRENT_TIMESTAMP, status = 'issued'`,
+            [id, studentId]
+        );
+
+        successResponse(res, 'Admit card issued successfully');
+    } catch (error) {
+        console.error('Issue admit card error:', error);
+        errorResponse(res, 'Failed to issue admit card', 500);
+    }
+};
+
+// Get Student Status List for Exam
+export const getExamStudentsStatus = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params;
+        const { classId, search } = req.query;
+        const schoolId = req.user?.schoolId;
+
+        let queryStr = `
+            SELECT DISTINCT s.id, s.admission_number, 
+                   up.first_name, up.last_name, 
+                   c.name as class_name, sec.name as section_name,
+                   ac.status as admit_card_status, ac.generated_at,
+                   COALESCE((SELECT SUM(amount_pending) FROM student_fees sf WHERE sf.student_id = s.id), 0) as total_pending
+            FROM students s
+            JOIN users u ON s.user_id = u.id
+            JOIN user_profiles up ON u.id = up.user_id
+            JOIN exam_schedules es ON s.current_class_id = es.class_id
+            JOIN classes c ON s.current_class_id = c.id
+            JOIN sections sec ON s.section_id = sec.id
+            LEFT JOIN admit_cards ac ON s.id = ac.student_id AND ac.exam_id = $1
+            WHERE es.exam_id = $1 AND s.status = 'active'
+        `;
+
+        const queryParams: any[] = [id];
+
+        if (classId) {
+            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(classId as string);
+            if (isUUID) {
+                queryStr += ` AND s.current_class_id = $${queryParams.length + 1}`;
+            } else {
+                queryStr += ` AND c.name = $${queryParams.length + 1}`;
+            }
+            queryParams.push(classId);
+        }
+
+        if (search) {
+            queryStr += ` AND (s.admission_number ILIKE $${queryParams.length + 1} OR up.first_name ILIKE $${queryParams.length + 1} OR up.last_name ILIKE $${queryParams.length + 1})`;
+            queryParams.push(`%${search}%`);
+        }
+
+        queryStr += ` ORDER BY c.name, sec.name, up.first_name`;
+
+        const result = await query(queryStr, queryParams);
+        successResponse(res, 'Student status fetched', result.rows);
+
+    } catch (error) {
+        console.error('Get exam students status error:', error);
+        errorResponse(res, 'Failed to fetch student status', 500);
+    }
+};

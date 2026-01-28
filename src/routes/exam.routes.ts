@@ -10,15 +10,27 @@ import {
     getExamStats,
     getExamById,
     updateExam,
-    deleteExam
+    deleteExam,
+    getActiveExams,
+    generateAdmitCards,
+    issueAdmitCard,
+    getAdmitCard,
+    getExamStudentsStatus
 } from '../controllers/exam.controller';
 
 const router = Router();
 
 router.use(authenticate);
 
+router.get('/active', getActiveExams);
 router.get('/', hasPermission('manage_exams'), getAllExams);
 router.post('/', hasPermission('manage_exams'), createExam);
+// Admit Cards
+router.post('/:id/admit-cards/generate', hasPermission('manage_exams'), generateAdmitCards);
+router.post('/:id/admit-cards/issue', hasPermission('manage_exams'), issueAdmitCard);
+router.get('/:id/admit-card-status', hasPermission('manage_exams'), getExamStudentsStatus);
+router.get('/:id/admit-card', authenticate, getAdmitCard);
+
 router.get('/:id', hasPermission('manage_exams'), getExamById);
 router.put('/:id', hasPermission('manage_exams'), updateExam);
 router.delete('/:id', adminOnly, deleteExam);

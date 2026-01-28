@@ -70,6 +70,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             permissions: user.permissions || {},
         };
 
+        console.log('🔑 Login successful - Generating token for:', user.email, 'Role:', user.role);
         const token = generateToken(payload);
 
         successResponse(res, 'Login successful', {

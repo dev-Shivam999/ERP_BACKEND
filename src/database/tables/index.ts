@@ -346,7 +346,8 @@ CREATE TABLE IF NOT EXISTS exams (
   start_date DATE NOT NULL,
   end_date DATE NOT NULL,
   is_published BOOLEAN DEFAULT false,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS exam_schedules (
@@ -742,6 +743,36 @@ END $$;
 `;
 
 // ============================================
+// 16. EXAM UPDATED AT
+// ============================================
+export const addUpdatedAtToExams = () => `
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'exams' AND column_name = 'updated_at') THEN
+        ALTER TABLE exams ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
+    END IF;
+END $$;
+`;
+
+// ============================================
+// ALL TABLES EXPORT
+// ============================================
+// ============================================
+// 17. ADMIT CARDS
+// ============================================
+export const admitCards = () => `
+CREATE TABLE IF NOT EXISTS admit_cards (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    exam_id UUID NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    generated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR(20) DEFAULT 'issued' CHECK (status IN ('issued', 'blocked', 'revoked')),
+    remarks TEXT,
+    UNIQUE(exam_id, student_id)
+);
+`;
+
+// ============================================
 // ALL TABLES EXPORT
 // ============================================
 export const allTables = [
@@ -762,4 +793,6 @@ export const allTables = [
   { name: '13_update_homework_status', sql: updateHomeworkStatusCheck },
   { name: '14_payroll', sql: payroll },
   { name: '15_add_onesignal_id_to_users', sql: addOneSignalIdToUsers },
+  { name: '16_add_updated_at_to_exams', sql: addUpdatedAtToExams },
+  { name: '17_admit_cards', sql: admitCards },
 ];

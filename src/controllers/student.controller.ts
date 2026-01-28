@@ -613,3 +613,77 @@ export const uploadDocument = async (req: Request, res: Response): Promise<void>
         errorResponse(res, 'Failed to upload document', 500);
     }
 };
+// Get logged-in student profile
+export const getStudentProfile = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const userId = req.user?.userId;
+        const schoolId = req.user?.schoolId;
+
+        const result = await query(
+            `SELECT s.id, s.admission_number, s.roll_number,
+               up.first_name, up.last_name, up.photo_url,
+               c.name as class_name, sec.name as section_name,
+               u.email, u.phone
+        FROM students s
+        JOIN users u ON s.user_id = u.id
+        JOIN user_profiles up ON u.id = up.user_id
+        JOIN classes c ON s.current_class_id = c.id
+        JOIN sections sec ON s.section_id = sec.id
+        WHERE s.user_id = $1 AND u.school_id = $2`,
+            [userId, schoolId]
+        );
+
+        if (result.rows.length === 0) {
+            errorResponse(res, 'Student profile not found', 404);
+            return;
+        }
+
+        successResponse(res, 'Profile fetched', result.rows[0]);
+    } catch (error) {
+        console.error('Get student profile error:', error);
+        errorResponse(res, 'Failed to fetch profile', 500);
+    }
+};
+
+// Get teachers for the student
+export const getStudentTeachers = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const userId = req.user?.userId;
+
+        // 1. Get student's class/section
+        const studentRes = await query(
+            `SELECT current_class_id, section_id FROM students WHERE user_id = $1`,
+            [userId]
+        );
+
+        if (studentRes.rows.length === 0) {
+            errorResponse(res, 'Student not found', 404);
+            return;
+        }
+
+        const { current_class_id, section_id } = studentRes.rows[0];
+
+        // 2. Fetch assigned teachers
+        const teachersRes = await query(
+            `SELECT 
+                t.id, t.employee_id,
+                up.first_name, up.last_name, up.photo_url,
+                u.email, u.phone,
+                s.name as subject_name,
+                tca.is_class_teacher
+             FROM teacher_class_assignments tca
+             JOIN teachers t ON tca.teacher_id = t.id
+             JOIN users u ON t.user_id = u.id
+             JOIN user_profiles up ON u.id = up.user_id
+             JOIN subjects s ON tca.subject_id = s.id
+             WHERE tca.class_id = $1 AND tca.section_id = $2
+             ORDER BY tca.is_class_teacher DESC, s.name ASC`,
+            [current_class_id, section_id]
+        );
+
+        successResponse(res, 'Teachers fetched', teachersRes.rows);
+    } catch (error) {
+        console.error('Get student teachers error:', error);
+        errorResponse(res, 'Failed to fetch teachers', 500);
+    }
+};

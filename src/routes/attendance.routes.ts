@@ -13,6 +13,9 @@ router.post('/mark', hasPermission('mark_attendance'), attendanceController.mark
 // GET /api/attendance/class/:classId/:sectionId/:date - Get class attendance for a date
 router.get('/class/:classId/:sectionId/:date', hasPermission('mark_attendance'), attendanceController.getClassAttendance);
 
+// GET /api/attendance/student/me - Get logged-in student's attendance
+router.get('/student/me', attendanceController.getMyAttendance);
+
 // GET /api/attendance/student/:studentId - Get student attendance history
 router.get('/student/:studentId', teacherAccess, attendanceController.getStudentAttendance);
 

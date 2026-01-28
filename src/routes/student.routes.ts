@@ -10,6 +10,12 @@ router.use(authenticate);
 // GET /api/students - List all students (with filters)
 router.get('/', teacherAccess, studentController.getAllStudents);
 
+// GET /api/students/me - Get logged-in student profile
+router.get('/me', studentController.getStudentProfile);
+
+// GET /api/students/me/teachers - Get student's teachers
+router.get('/me/teachers', studentController.getStudentTeachers);
+
 // GET /api/students/:id - Get student by ID
 router.get('/:id', teacherAccess, studentController.getStudentById);
 
