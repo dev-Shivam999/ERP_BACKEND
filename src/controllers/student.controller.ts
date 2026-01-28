@@ -397,6 +397,7 @@ export const updateStudent = async (req: Request, res: Response): Promise<void> 
           transport_required = COALESCE($12, transport_required),
           hostel_required = COALESCE($13, hostel_required),
           admission_date = COALESCE($14, admission_date),
+          status = COALESCE($15, status),
           updated_at = CURRENT_TIMESTAMP
          WHERE id = $1`,
                 [
@@ -406,7 +407,8 @@ export const updateStudent = async (req: Request, res: Response): Promise<void> 
                     data.previousSchool, data.transferCertificateNo,
                     data.isGovtScholarship, data.scholarshipType,
                     data.transportRequired, data.hostelRequired,
-                    data.admissionDate
+                    data.admissionDate,
+                    data.status
                 ]
             );
 
@@ -499,7 +501,34 @@ export const updateStudent = async (req: Request, res: Response): Promise<void> 
             }
         });
 
-        successResponse(res, 'Student updated successfully');
+        // Fetch updated student data to return
+        const updatedStudent = await query(
+            `SELECT s.id, s.admission_number, s.roll_number, s.category, s.status,
+              s.is_govt_scholarship, s.scholarship_type, s.stream,
+              s.previous_school, s.transport_required, s.hostel_required,
+              up.first_name, up.last_name, up.photo_url, up.gender, up.date_of_birth,
+              u.phone, u.email,
+              c.name as class_name, sec.name as section_name,
+              pup.first_name || ' ' || COALESCE(pup.last_name, '') as father_name,
+              mup.first_name || ' ' || COALESCE(mup.last_name, '') as mother_name
+       FROM students s
+       JOIN users u ON s.user_id = u.id
+       JOIN user_profiles up ON u.id = up.user_id
+       JOIN classes c ON s.current_class_id = c.id
+       JOIN sections sec ON s.section_id = sec.id
+       LEFT JOIN student_parents sp ON s.id = sp.student_id AND sp.relationship = 'father'
+       LEFT JOIN parents p ON sp.parent_id = p.id
+       LEFT JOIN users pu ON p.user_id = pu.id
+       LEFT JOIN user_profiles pup ON pu.id = pup.user_id
+       LEFT JOIN student_parents msp ON s.id = msp.student_id AND msp.relationship = 'mother'
+       LEFT JOIN parents mp ON msp.parent_id = mp.id
+       LEFT JOIN users mu ON mp.user_id = mu.id
+       LEFT JOIN user_profiles mup ON mu.id = mup.user_id
+       WHERE s.id = $1`,
+            [id]
+        );
+
+        successResponse(res, 'Student updated successfully', updatedStudent.rows[0]);
     } catch (error) {
         console.error('Update student error:', error);
         errorResponse(res, 'Failed to update student', 500);

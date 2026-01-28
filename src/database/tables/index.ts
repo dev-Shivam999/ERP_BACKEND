@@ -729,6 +729,19 @@ CREATE INDEX IF NOT EXISTS idx_payroll_period ON payroll(month, year);
 `;
 
 // ============================================
+// 15. ONESIGNAL INTEGRATION
+// ============================================
+export const addOneSignalIdToUsers = () => `
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'onesignal_player_id') THEN
+        ALTER TABLE users ADD COLUMN onesignal_player_id TEXT;
+        CREATE INDEX idx_users_onesignal_id ON users(onesignal_player_id);
+    END IF;
+END $$;
+`;
+
+// ============================================
 // ALL TABLES EXPORT
 // ============================================
 export const allTables = [
@@ -748,4 +761,5 @@ export const allTables = [
   { name: '12_homework', sql: homework },
   { name: '13_update_homework_status', sql: updateHomeworkStatusCheck },
   { name: '14_payroll', sql: payroll },
+  { name: '15_add_onesignal_id_to_users', sql: addOneSignalIdToUsers },
 ];

@@ -18,9 +18,11 @@ export const login = async (req: Request, res: Response): Promise<void> => {
         // Find user by email
         const userResult = await query(
             `SELECT u.id, u.school_id, u.email, u.password_hash, u.role, u.is_active, u.permissions,
-              up.first_name, up.last_name, up.photo_url
+              up.first_name, up.last_name, up.photo_url,
+              s.status as student_status
        FROM users u
        LEFT JOIN user_profiles up ON u.id = up.user_id
+       LEFT JOIN students s ON u.id = s.user_id
        WHERE u.email = $1`,
             [email.toLowerCase()]
         );
@@ -34,6 +36,12 @@ export const login = async (req: Request, res: Response): Promise<void> => {
 
         if (!user.is_active) {
             errorResponse(res, 'Account is deactivated. Please contact admin.', 401);
+            return;
+        }
+
+        // Check student status
+        if (user.role === 'student' && user.student_status && user.student_status !== 'active') {
+            errorResponse(res, `Login failed: Your account status is ${user.student_status}. Please contact office to reactivate.`, 401);
             return;
         }
 
@@ -296,6 +304,32 @@ export const updateUserPermissions = [
         } catch (error) {
             console.error('Update permissions error:', error);
             errorResponse(res, 'Failed to update user permissions', 500);
+        }
+    },
+];
+
+// Update OneSignal Player ID
+export const updatePlayerId = [
+    authenticate,
+    async (req: Request, res: Response): Promise<void> => {
+        try {
+            const userId = req.user?.userId;
+            const { playerId } = req.body;
+
+            if (!playerId) {
+                errorResponse(res, 'Player ID is required', 400);
+                return;
+            }
+
+            await query(
+                'UPDATE users SET onesignal_player_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+                [playerId, userId]
+            );
+
+            successResponse(res, 'Player ID updated successfully');
+        } catch (error) {
+            console.error('Update player ID error:', error);
+            errorResponse(res, 'Failed to update player ID', 500);
         }
     },
 ];

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { query, transaction } from '../config';
 import { successResponse, errorResponse } from '../utils';
+import { sendStudentNotification } from '../utils/notification.utils';
 
 // Get all exams
 export const getAllExams = async (req: Request, res: Response): Promise<void> => {
@@ -103,18 +104,24 @@ export const createExam = async (req: Request, res: Response): Promise<void> => 
                     }
                 }
 
-                // Send notification to students of these classes
-                await client.query(
-                    `INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, target_ids, created_by)
-                     VALUES ($1, $2, $3, 'general', 'high', 'class', $4, $5)`,
-                    [
-                        schoolId,
+                // Send notification to ACTIVE students of these classes
+                const activeStudents = await client.query(
+                    `SELECT id, user_id FROM students WHERE current_class_id = ANY($1) AND status = 'active'`,
+                    [selectedClasses]
+                );
+
+                for (const student of activeStudents.rows) {
+                    await sendStudentNotification(
+                        student.id,
                         `New Exam: ${name}`,
                         `Examination schedule for ${name} has been published. Exams start from ${startDate}.`,
-                        JSON.stringify(selectedClasses),
-                        req.user?.userId
-                    ]
-                );
+                        'general',
+                        'high',
+                        req.user?.userId || '',
+                        schoolId || '',
+                        client
+                    );
+                }
             }
 
             // Send notification to all teachers

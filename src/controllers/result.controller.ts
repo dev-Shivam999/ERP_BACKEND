@@ -468,7 +468,7 @@ export const publishResults = async (req: Request, res: Response): Promise<void>
                          JOIN users u ON s.user_id = u.id
                          JOIN student_parents sp ON s.id = sp.student_id AND sp.is_primary_contact = true
                          JOIN parents p ON sp.parent_id = p.id
-                         WHERE s.id = $1`,
+                         WHERE s.id = $1 AND s.status = 'active'`,
                         [student.student_id, userId]
                     );
                 }

@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { query } from '../config/database';
+import { sendStudentNotification } from '../utils/notification.utils';
 
 export const createHomework = async (req: Request, res: Response): Promise<void> => {
     try {
@@ -46,32 +47,20 @@ export const createHomework = async (req: Request, res: Response): Promise<void>
 
             // 3. Create Notifications for Students
             const studentIds = studentsResult.rows.map(s => s.id);
-            // We can do this in a loop or a bulk insert if supported. 
-            // For simplicity and to use the notifications table structure:
-            const notificationQuery = `
-                INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, target_ids, created_by)
-                VALUES ($1, $2, $3, 'homework', 'normal', 'individual', $4, $5)
-            `;
 
-            // We'll create one notification entry targeting all students (if target_ids supports array) 
-            // OR distinct notifications. 
-            // Looking at the attendance controller example: 
-            // "target_type": 'individual', "target_ids": jsonb_build_array(p.user_id)
-            // It seems we should target the STUDENT'S USER_ID. 
-            // We need to fetch user_ids for these students first.
-            const userIdsResult = await query(
-                `SELECT user_id FROM students WHERE id = ANY($1)`,
-                [studentIds]
-            );
-            const userIds = userIdsResult.rows.map(r => r.user_id);
+            // Fetch student details to get user_id (though utility does it again, we have the IDs)
+            // Actually, the utility takes studentId and fetches user_id internally. 
+            // We can just loop through studentIds.
 
-            // Loop to send individual notifications (safer for now, or use target_type 'class' if supported)
-            // Assuming individual for now based on attendance pattern
-            for (const uid of userIds) {
-                await query(
-                    `INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, target_ids, created_by)
-                     VALUES ($1, 'New Homework: ' || $2, $3, 'homework', 'normal', 'individual', jsonb_build_array($4::uuid), $5)`,
-                    [req.user?.schoolId, title, description.substring(0, 50) + '...', uid, req.user?.userId]
+            for (const studentId of studentIds) {
+                await sendStudentNotification(
+                    studentId,
+                    `New Homework: ${title}`,
+                    description.substring(0, 50) + '...',
+                    'homework',
+                    'normal',
+                    req.user?.userId || '',
+                    req.user?.schoolId || ''
                 );
             }
         }

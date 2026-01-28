@@ -44,4 +44,9 @@ export const config = {
     school: {
         defaultAcademicYear: process.env.DEFAULT_ACADEMIC_YEAR || '2025-26',
     },
+
+    oneSignal: {
+        appId: process.env.ONESIGNAL_APP_ID,
+        apiKey: process.env.ONESIGNAL_API_KEY,
+    },
 };

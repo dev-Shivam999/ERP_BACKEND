@@ -18,6 +18,9 @@ router.post('/change-password', authController.changePassword);
 // POST /api/auth/reset-password-admin - Reset password by admin
 router.post('/reset-password-admin', authController.adminResetPassword);
 
+// POST /api/auth/update-player-id - Update OneSignal Player ID
+router.post('/update-player-id', authController.updatePlayerId);
+
 // POST /api/auth/update-permissions-admin - Update user permissions by admin
 router.post('/update-permissions-admin', authController.updateUserPermissions);
 
