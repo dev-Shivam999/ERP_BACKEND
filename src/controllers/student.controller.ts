@@ -334,13 +334,22 @@ export const createStudent = async (req: Request, res: Response): Promise<void> 
     } catch (error: any) {
         console.error('Create student error:', error);
 
-        // Handle duplicate admission number or unique constraint violations
+        // Handle unique constraint violations (PostgreSQL error code 23505)
         if (error.code === '23505') {
             const detail = error.detail || '';
-            const message = detail.includes('admission_number')
-                ? 'Student with this Admission Number already exists.'
-                : 'A student with these unique details already exists.';
-            errorResponse(res, message, 400); // 400 Bad Request for user-side errors
+            let message = 'A student with these unique details already exists.';
+
+            if (detail.includes('admission_number')) {
+                message = 'Student with this Admission Number already exists.';
+            } else if (detail.includes('email')) {
+                message = 'Email address is already in use by another user.';
+            } else if (detail.includes('phone')) {
+                message = 'Phone number is already in use by another user.';
+            } else if (detail.includes('aadhar_number')) {
+                message = 'Aadhar Number already exists in the system.';
+            }
+
+            errorResponse(res, message, 400);
             return;
         }
 
@@ -529,8 +538,27 @@ export const updateStudent = async (req: Request, res: Response): Promise<void> 
         );
 
         successResponse(res, 'Student updated successfully', updatedStudent.rows[0]);
-    } catch (error) {
+    } catch (error: any) {
         console.error('Update student error:', error);
+
+        if (error.code === '23505') {
+            const detail = error.detail || '';
+            let message = 'A student with these unique details already exists.';
+
+            if (detail.includes('admission_number')) {
+                message = 'Student with this Admission Number already exists.';
+            } else if (detail.includes('email')) {
+                message = 'Email address is already in use by another user.';
+            } else if (detail.includes('phone')) {
+                message = 'Phone number is already in use by another user.';
+            } else if (detail.includes('aadhar_number')) {
+                message = 'Aadhar Number already exists in the system.';
+            }
+
+            errorResponse(res, message, 400);
+            return;
+        }
+
         errorResponse(res, 'Failed to update student', 500);
     }
 };

@@ -29,7 +29,7 @@ export const query = async <T = any>(
     const duration = Date.now() - start;
 
     if (config.nodeEnv === 'development') {
-        console.log('🔍 Query executed:', { text: text.substring(0, 100), duration: `${duration}ms`, rows: result.rowCount });
+        // console.log('🔍 Query executed:', { text: text.substring(0, 100), duration: `${duration}ms`, rows: result.rowCount });
     }
 
     return result;

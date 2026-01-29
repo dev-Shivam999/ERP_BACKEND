@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { query, transaction } from '../config';
 import { successResponse, errorResponse } from '../utils';
+import { getStudentFeeTotals, getAllStudentsFeeTotals, getSchoolFeeSummary } from '../utils/feeUtils';
 
 // Get student fee details
 export const getStudentFees = async (req: Request, res: Response): Promise<void> => {
@@ -9,10 +10,12 @@ export const getStudentFees = async (req: Request, res: Response): Promise<void>
 
         // Get student info
         const studentResult = await query(
-            `SELECT s.admission_number, s.category, s.is_govt_scholarship, s.scholarship_type,
+            `SELECT s.id, s.admission_number, s.category, s.is_govt_scholarship, s.scholarship_type,
               s.govt_fee_concession_percent,
+              up.first_name, up.last_name,
               up.first_name || ' ' || COALESCE(up.last_name, '') as student_name,
               c.name as class_name, sec.name as section_name,
+              c.id as class_id,
               c.monthly_fee_amount as expected_monthly_fee
        FROM students s
        JOIN users u ON s.user_id = u.id
@@ -39,32 +42,17 @@ export const getStudentFees = async (req: Request, res: Response): Promise<void>
             [studentId]
         );
 
-        // Calculate totals
-        const totals = feesResult.rows.reduce(
-            (acc, fee) => ({
-                totalDue: acc.totalDue + parseFloat(fee.amount_due),
-                totalPaid: acc.totalPaid + parseFloat(fee.amount_paid),
-                totalPending: acc.totalPending + parseFloat(fee.amount_pending),
-            }),
-            { totalDue: 0, totalPaid: 0, totalPending: 0 }
-        );
-
-        // Fallback for totals if no fees recorded yet
-        if (feesResult.rows.length === 0 && studentResult.rows[0]) {
-            const student = studentResult.rows[0];
-            // In a real scenario, we might want to check the class monthly fee
-            // For now, let's at least ensure we don't just return 0 if the student is active
-            // The getPendingFees already has some logic for this, let's align.
-            // But getStudentFees is more specific.
-        }
+        // Use centralized fee calculator for accurate totals and breakdown
+        const calculatedTotals = await getStudentFeeTotals(studentId as string);
 
         successResponse(res, 'Student fees fetched', {
             student: studentResult.rows[0],
             fees: feesResult.rows,
-            totals: feesResult.rows.length > 0 ? totals : {
-                totalDue: parseFloat(studentResult.rows[0].expected_monthly_fee || 0),
-                totalPaid: 0,
-                totalPending: parseFloat(studentResult.rows[0].expected_monthly_fee || 0)
+            totals: {
+                totalDue: calculatedTotals.totalDue,
+                totalPaid: calculatedTotals.totalPaid,
+                totalPending: calculatedTotals.totalPending,
+                breakdown: calculatedTotals.breakdown
             },
         });
     } catch (error) {
@@ -117,97 +105,100 @@ export const collectFee = async (req: Request, res: Response): Promise<void> => 
             const payments = [];
 
             let feeIdsToProcess = studentFeeIds;
+            // If still no fees found, we can't record a payment against nothing.
             if (!feeIdsToProcess || feeIdsToProcess.length === 0) {
-                const pendingResult = await client.query(
-                    `SELECT id FROM student_fees 
-                     WHERE student_id = $1 AND status != 'paid' 
-                     ORDER BY year ASC, month ASC, due_date ASC`,
+                // Determine fee type and period if not provided
+                const payMonth = req.body.month ? parseInt(req.body.month.split('-')[1]) : new Date().getMonth() + 1;
+                const payYear = req.body.month ? parseInt(req.body.month.split('-')[0]) : new Date().getFullYear();
+                const feeTypeName = req.body.feeType || 'tuition';
+
+                // Find student class and info to apply concessions
+                const studentInfo = await client.query(
+                    `SELECT s.id, s.current_class_id, s.govt_fee_concession_percent, ay.id as academic_year_id 
+                     FROM students s
+                     JOIN users u ON s.user_id = u.id
+                     JOIN academic_years ay ON ay.school_id = u.school_id AND ay.is_current = true
+                     WHERE s.id = $1`,
                     [studentId]
                 );
 
-                if (pendingResult.rows.length > 0) {
-                    feeIdsToProcess = pendingResult.rows.map(r => r.id);
-                } else {
-                    // Try to generate a fee record for the requested month/year
-                    const payMonth = req.body.month ? parseInt(req.body.month.split('-')[1]) : new Date().getMonth() + 1;
-                    const payYear = req.body.month ? parseInt(req.body.month.split('-')[0]) : new Date().getFullYear();
-                    const feeTypeName = req.body.feeType || 'tuition';
+                if (studentInfo.rows.length > 0) {
+                    const { current_class_id, academic_year_id, govt_fee_concession_percent } = studentInfo.rows[0];
+                    const concessionPercent = parseFloat(govt_fee_concession_percent || '0');
 
-                    // Find student class and current academic year
-                    const studentInfo = await client.query(
-                        `SELECT s.current_class_id, ay.id as academic_year_id 
-                         FROM students s
-                         JOIN users u ON s.user_id = u.id
-                         JOIN academic_years ay ON ay.school_id = u.school_id AND ay.is_current = true
-                         WHERE s.id = $1`,
-                        [studentId]
+                    // Find matching fee structure
+                    const structResult = await client.query(
+                        `SELECT fs.id, fs.amount, ft.name as real_fee_name
+                         FROM fee_structures fs
+                         JOIN fee_types ft ON fs.fee_type_id = ft.id
+                         WHERE fs.class_id = $1 AND fs.academic_year_id = $2 AND ft.name ILIKE $3`,
+                        [current_class_id, academic_year_id, `%${feeTypeName}%`]
                     );
 
-                    if (studentInfo.rows.length > 0) {
-                        const { current_class_id, academic_year_id } = studentInfo.rows[0];
+                    if (structResult.rows.length > 0) {
+                        const struct = structResult.rows[0];
+                        const originalAmount = parseFloat(struct.amount);
+                        const discount = (originalAmount * concessionPercent) / 100;
+                        const finalAmount = Math.max(0, originalAmount - discount);
 
-                        // Find matching fee structure
-                        const structResult = await client.query(
-                            `SELECT fs.id, fs.amount 
-                             FROM fee_structures fs
-                             JOIN fee_types ft ON fs.fee_type_id = ft.id
-                             WHERE fs.class_id = $1 AND fs.academic_year_id = $2 AND ft.name ILIKE $3`,
-                            [current_class_id, academic_year_id, `%${feeTypeName}%`]
+                        // Check for existing record
+                        const existingFee = await client.query(
+                            `SELECT id FROM student_fees 
+                             WHERE student_id = $1 AND fee_structure_id = $2 AND month = $3 AND year = $4`,
+                            [studentId, struct.id, payMonth, payYear]
                         );
 
-                        if (structResult.rows.length > 0) {
-                            const struct = structResult.rows[0];
-                            // Create the fee record
+                        if (existingFee.rows.length > 0) {
+                            feeIdsToProcess = [existingFee.rows[0].id];
+                        } else {
                             const createResult = await client.query(
-                                `INSERT INTO student_fees (student_id, fee_structure_id, month, year, original_amount, amount_due, amount_pending, due_date, status)
-                                 VALUES ($1, $2, $3, $4, $5, $5, $5, $6, 'pending')
+                                `INSERT INTO student_fees (student_id, fee_structure_id, month, year, original_amount, amount_due, amount_pending, amount_paid, due_date, status)
+                                 VALUES ($1, $2, $3, $4, $5, $6, $6, 0, $7, 'pending')
                                  RETURNING id`,
-                                [studentId, struct.id, payMonth, payYear, struct.amount, `${payYear}-${payMonth}-10`]
+                                [studentId, struct.id, payMonth, payYear, originalAmount, finalAmount, `${payYear}-${payMonth}-10`]
                             );
                             feeIdsToProcess = [createResult.rows[0].id];
-                        } else {
-                            // Fallback to class monthly_fee_amount
-                            const classResult = await client.query(`SELECT monthly_fee_amount FROM classes WHERE id = $1`, [current_class_id]);
-                            const amount = classResult.rows[0]?.monthly_fee_amount || 0;
-
-                            throw new Error(`No fee structure found for ${feeTypeName} in this class. Please configure fee structures.`);
                         }
+                    } else {
+                        throw new Error(`No fee structure found for ${feeTypeName}. Please configure it in settings.`);
                     }
                 }
             }
 
-            // If still no fees found, we can't record a payment against nothing.
             if (!feeIdsToProcess || feeIdsToProcess.length === 0) {
-                throw new Error('No pending fees found and could not generate one. Please ensure fee structures are configured.');
+                throw new Error('Could not identify or create an appropriate fee record for this payment.');
             }
 
-            // Process each fee
+            // Process each fee with spillover handling
             for (const feeId of feeIdsToProcess) {
                 if (remainingAmount <= 0) break;
 
-                // Get fee details
-                const feeResult = await client.query(
-                    `SELECT * FROM student_fees WHERE id = $1`,
-                    [feeId]
-                );
-
+                const feeResult = await client.query(`SELECT * FROM student_fees WHERE id = $1`, [feeId]);
                 if (feeResult.rows.length === 0) continue;
 
                 const fee = feeResult.rows[0];
-                const payAmount = Math.min(remainingAmount, parseFloat(fee.amount_pending));
+                const pending = parseFloat(fee.amount_pending);
+
+                // If this is the last fee in the selection and we STILL have more money,
+                // we'll record the full remaining amount here to avoid losing it.
+                // The status will remain 'paid' but with a surplus if we allowed it,
+                // but for now let's just apply up to 'pending' and then look for the NEXT month if selection was generic.
+                const isLastInList = feeId === feeIdsToProcess[feeIdsToProcess.length - 1];
+                const payAmount = isLastInList ? remainingAmount : Math.min(remainingAmount, pending);
+
+                if (payAmount <= 0) continue;
 
                 // Create payment record
                 await client.query(
-                    `INSERT INTO fee_payments (student_fee_id, receipt_number, amount_paid, payment_mode, payment_date, 
-                                     cheque_number, cheque_date, bank_name, transaction_id, collected_by, remarks)
-                     VALUES ($1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8, $9, $10)`,
-                    [feeId, receiptNumber, payAmount, paymentMode, chequeNumber, chequeDate, bankName, transactionId, userId, remarks]
+                    `INSERT INTO fee_payments (student_fee_id, receipt_number, amount_paid, payment_mode, payment_date, remarks, collected_by)
+                     VALUES ($1, $2, $3, $4, CURRENT_DATE, $5, $6)`,
+                    [feeId, receiptNumber, payAmount, paymentMode, remarks, userId]
                 );
 
                 // Update fee record
                 const newPaid = parseFloat(fee.amount_paid) + payAmount;
-                const newPending = parseFloat(fee.amount_due) - newPaid;
-                const newStatus = newPending <= 0 ? 'paid' : 'partial';
+                const newPending = Math.max(0, parseFloat(fee.amount_due) - newPaid);
+                const newStatus = newPending <= 0 ? (newPaid > parseFloat(fee.amount_due) ? 'paid' : 'paid') : 'partial';
 
                 await client.query(
                     `UPDATE student_fees SET amount_paid = $2, amount_pending = $3, status = $4
@@ -294,83 +285,44 @@ export const getPendingFees = async (req: Request, res: Response): Promise<void>
         const schoolId = req.user?.schoolId;
         const { classId, search } = req.query;
 
-        let whereClause = 'WHERE u.school_id = $1 AND s.status = \'active\'';
-        const params: any[] = [schoolId];
-        let paramIndex = 2;
+        // Use centralized utility for consistent calculations
+        let allStudents = await getAllStudentsFeeTotals(schoolId as string);
 
         if (classId) {
-            whereClause += ` AND s.current_class_id = $${paramIndex++}`;
-            params.push(classId);
+            allStudents = allStudents.filter(s => String(s.classId) === String(classId));
         }
 
         if (search) {
-            whereClause += ` AND (up.first_name ILIKE $${paramIndex} OR up.last_name ILIKE $${paramIndex} OR s.admission_number ILIKE $${paramIndex})`;
-            params.push(`%${search}%`);
-            paramIndex++;
+            const searchLower = (search as string).toLowerCase();
+            allStudents = allStudents.filter(s =>
+                s.studentName.toLowerCase().includes(searchLower) ||
+                s.admissionNumber.toLowerCase().includes(searchLower)
+            );
         }
 
-        const result = await query(
-            `SELECT s.id as student_id, s.admission_number,
-              up.first_name || ' ' || COALESCE(up.last_name, '') as student_name,
-              c.name as class_name, sec.name as section_name,
-              c.monthly_fee_amount as expected_monthly_fee,
-              COALESCE(SUM(sf.amount_paid), 0) as total_paid,
-              CASE 
-                WHEN COUNT(sf.id) > 0 THEN SUM(sf.amount_due)
-                ELSE c.monthly_fee_amount
-              END as total_due,
-              CASE 
-                WHEN COUNT(sf.id) > 0 THEN SUM(sf.amount_pending)
-                ELSE c.monthly_fee_amount
-              END as total_pending
-       FROM students s
-       JOIN users u ON s.user_id = u.id
-       JOIN user_profiles up ON u.id = up.user_id
-       JOIN classes c ON s.current_class_id = c.id
-       JOIN sections sec ON s.section_id = sec.id
-       LEFT JOIN student_fees sf ON s.id = sf.student_id
-       ${whereClause}
-       GROUP BY s.id, s.admission_number, up.first_name, up.last_name, c.name, sec.name, c.monthly_fee_amount
-       ORDER BY total_pending DESC, student_name ASC`,
-            params
-        );
+        // Get summary using centralized utility
+        const summary = await getSchoolFeeSummary(schoolId as string);
 
-        // Get aggregate stats for summary cards
-        // Using independent queries or subqueries to ensure accuracy regardless of filters
-        const summaryResult = await query(
-            `SELECT 
-                (SELECT COALESCE(SUM(fp.amount_paid), 0) FROM fee_payments fp 
-                 JOIN student_fees sf ON fp.student_fee_id = sf.id 
-                 JOIN students s ON sf.student_id = s.id 
-                 JOIN users u ON s.user_id = u.id 
-                 WHERE u.school_id = $1 AND fp.payment_date = CURRENT_DATE) as today_collection,
-                
-                (SELECT COALESCE(SUM(fp.amount_paid), 0) FROM fee_payments fp 
-                 JOIN student_fees sf ON fp.student_fee_id = sf.id 
-                 JOIN students s ON sf.student_id = s.id 
-                 JOIN users u ON s.user_id = u.id 
-                 WHERE u.school_id = $1) as total_collected_year,
-                
-                (SELECT 
-                    (SELECT COALESCE(SUM(sf_sum.amount_pending), 0) 
-                     FROM student_fees sf_sum 
-                     JOIN students s_sum ON sf_sum.student_id = s_sum.id 
-                     JOIN users u_sum ON s_sum.user_id = u_sum.id 
-                     WHERE u_sum.school_id = $1 AND s_sum.status = 'active') 
-                    +
-                    (SELECT COALESCE(SUM(c_sum.monthly_fee_amount), 0) 
-                     FROM students s_sum2
-                     JOIN users u_sum2 ON s_sum2.user_id = u_sum2.id
-                     JOIN classes c_sum ON s_sum2.current_class_id = c_sum.id
-                     WHERE u_sum2.school_id = $1 AND s_sum2.status = 'active'
-                     AND NOT EXISTS (SELECT 1 FROM student_fees sf_exist WHERE sf_exist.student_id = s_sum2.id))
-                ) as total_pending_all`,
-            [schoolId]
-        );
+        // Map to expected format
+        const students = allStudents.map(s => ({
+            student_id: s.studentId,
+            admission_number: s.admissionNumber,
+            student_name: s.studentName,
+            class_name: s.className,
+            section_name: s.sectionName,
+            class_id: s.classId,
+            total_paid: s.totalPaid,
+            total_due: s.totalDue,
+            total_pending: s.totalPending,
+        }));
 
         successResponse(res, 'Pending fees fetched', {
-            students: result.rows,
-            summary: summaryResult.rows[0]
+            students,
+            summary: {
+                today_collection: summary.todayCollection,
+                total_collected_year: summary.yearlyCollection,
+                total_pending_all: summary.totalPending,
+            }
         });
     } catch (error) {
         console.error('Get pending fees error:', error);
@@ -682,14 +634,16 @@ export const getAllPayments = async (req: Request, res: Response): Promise<void>
         // Add pagination params
         params.push(limitNum);
         params.push(offset);
-
         // Get payments with details
         const result = await query(
-            `SELECT fp.id, fp.amount_paid, fp.payment_mode, fp.receipt_number, fp.payment_date,
+            `SELECT fp.id, fp.amount_paid as amount, fp.payment_mode, fp.receipt_number, fp.payment_date,
                     up.first_name || ' ' || COALESCE(up.last_name, '') as student_name,
-                    c.name as class_name, sec.name as section_name
+                    c.name as class_name, sec.name as section_name,
+                    ft.name as fee_type_name
              FROM fee_payments fp
              JOIN student_fees sf ON fp.student_fee_id = sf.id
+             LEFT JOIN fee_structures fs ON sf.fee_structure_id = fs.id
+             LEFT JOIN fee_types ft ON fs.fee_type_id = ft.id
              JOIN students s ON sf.student_id = s.id
              JOIN users u ON s.user_id = u.id
              JOIN user_profiles up ON u.id = up.user_id
@@ -700,6 +654,11 @@ export const getAllPayments = async (req: Request, res: Response): Promise<void>
              LIMIT $${paramCounter + 1} OFFSET $${paramCounter + 2}`,
             params
         );
+
+        console.log('DEBUG: Payments fetched for student:', studentId, 'Count:', result.rows.length);
+        if (result.rows.length > 0) {
+            console.log('DEBUG: First payment item:', JSON.stringify(result.rows[0]));
+        }
 
         // Get total count
         const countParams = studentId ? [studentId] : [];
@@ -765,24 +724,49 @@ export const updateFeeStructures = async (req: Request, res: Response): Promise<
             return;
         }
 
+        let updatedStudentFees = 0;
+
         await transaction(async (client) => {
             for (const struct of structures) {
                 if (!struct.id) continue;
 
-                // Update the structure
+                const newAmount = parseFloat(struct.amount);
+
+                // Update the fee structure
                 await client.query(
                     `UPDATE fee_structures SET amount = $1 WHERE id = $2`,
-                    [struct.amount, struct.id]
+                    [newAmount, struct.id]
                 );
+
+                // Recalculate all student_fees that reference this structure
+                // Only update records that are not fully paid
+                const updateResult = await client.query(`
+                    UPDATE student_fees 
+                    SET 
+                        original_amount = $1,
+                        amount_due = $1,
+                        amount_pending = GREATEST($1 - amount_paid, 0),
+                        status = CASE 
+                            WHEN ($1 - amount_paid) <= 0 THEN 'paid'
+                            WHEN amount_paid > 0 THEN 'partial'
+                            ELSE 'pending'
+                        END
+                    WHERE fee_structure_id = $2 
+                    AND status IN ('pending', 'partial', 'overdue')
+                    RETURNING id
+                `, [newAmount, struct.id]);
+
+                updatedStudentFees += updateResult.rowCount || 0;
             }
         });
 
-        successResponse(res, 'Fee structures updated successfully');
+        successResponse(res, `Fee structures updated. ${updatedStudentFees} student fee records recalculated.`);
     } catch (error) {
         console.error('Update fee structures error:', error);
         errorResponse(res, 'Failed to update fee structures', 500);
     }
 };
+
 
 // Create a new fee type
 export const createFeeType = async (req: Request, res: Response): Promise<void> => {
@@ -923,10 +907,13 @@ export const getPendingFeesDetail = async (req: Request, res: Response): Promise
                     up.first_name || ' ' || COALESCE(up.last_name, '') as student_name,
                     c.name as class_name, sec.name as section_name,
                     u.phone,
-                    CASE 
-                      WHEN COUNT(sf.id) > 0 THEN SUM(sf.amount_pending)
-                      ELSE c.monthly_fee_amount
-                    END as total_pending,
+                    GREATEST(
+                        COALESCE(
+                            (SELECT SUM(fs.amount) FROM fee_structures fs WHERE fs.class_id = c.id),
+                            c.monthly_fee_amount
+                        ) - COALESCE(SUM(sf.amount_paid), 0),
+                        0
+                    ) as total_pending,
                     MIN(sf.due_date) as oldest_due_date
              FROM students s
              JOIN users u ON s.user_id = u.id
@@ -935,8 +922,14 @@ export const getPendingFeesDetail = async (req: Request, res: Response): Promise
              JOIN sections sec ON s.section_id = sec.id
              LEFT JOIN student_fees sf ON s.id = sf.student_id
              WHERE u.school_id = $1 AND s.status = 'active'
-             GROUP BY s.id, s.admission_number, up.first_name, up.last_name, c.name, sec.name, u.phone, c.monthly_fee_amount
-             HAVING (COUNT(sf.id) > 0 AND SUM(sf.amount_pending) > 0) OR COUNT(sf.id) = 0
+             GROUP BY s.id, s.admission_number, up.first_name, up.last_name, c.id, c.name, sec.name, u.phone, c.monthly_fee_amount
+             HAVING GREATEST(
+                COALESCE(
+                    (SELECT SUM(fs.amount) FROM fee_structures fs WHERE fs.class_id = c.id),
+                    c.monthly_fee_amount
+                ) - COALESCE(SUM(sf.amount_paid), 0),
+                0
+             ) > 0
              ORDER BY total_pending DESC`,
             [schoolId]
         );
