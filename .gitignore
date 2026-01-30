@@ -13,6 +13,16 @@ dist-ssr
 *.local
 .env
 .env.*
+*.json
+!package.json
+!tsconfig.json
+!composer.json
+!package-lock.json
+!server/package.json
+!admin/package.json
+!mobile/package.json
+!mobile/app.json
+!mobile/eas.json
 
 # Editor directories and files
 .vscode/*
