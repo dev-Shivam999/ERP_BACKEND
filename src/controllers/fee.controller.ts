@@ -746,11 +746,11 @@ export const updateFeeStructures = async (req: Request, res: Response): Promise<
                         original_amount = $1,
                         amount_due = $1,
                         amount_pending = GREATEST($1 - amount_paid, 0),
-                        status = CASE 
+                        status = (CASE 
                             WHEN ($1 - amount_paid) <= 0 THEN 'paid'
                             WHEN amount_paid > 0 THEN 'partial'
                             ELSE 'pending'
-                        END
+                        END)::fee_status
                     WHERE fee_structure_id = $2 
                     AND status IN ('pending', 'partial', 'overdue')
                     RETURNING id
