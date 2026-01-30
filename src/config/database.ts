@@ -4,9 +4,12 @@ import { config } from './env';
 // Create connection pool
 const pool = new Pool({
     connectionString: config.db.url,
+    ssl: {
+        rejectUnauthorized: false, // 👈 THIS LINE FIXES IT
+    },
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    connectionTimeoutMillis: 10000,
 });
 
 // Event handlers

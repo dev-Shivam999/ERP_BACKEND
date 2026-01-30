@@ -676,7 +676,13 @@ export const getAdmitCard = async (req: Request, res: Response): Promise<void> =
                     s.admission_number, s.roll_number,
                     up.first_name || ' ' || COALESCE(up.last_name, '') as student_name,
                     c.name as class_name, sec.name as section_name,
-                    sch.name as school_name, sch.address as school_address, sch.logo_url as school_logo
+                    sch.name as school_name, sch.address as school_address, sch.logo_url as school_logo,
+                    (SELECT up2.first_name || ' ' || COALESCE(up2.last_name, '') 
+                     FROM parents p 
+                     JOIN student_parents sp ON p.id = sp.parent_id
+                     JOIN users u2 ON p.user_id = u2.id
+                     JOIN user_profiles up2 ON u2.id = up2.user_id
+                     WHERE sp.student_id = s.id AND sp.relationship = 'father' LIMIT 1) as father_name
              FROM exams e
              JOIN students s ON s.id = $2
              JOIN users u ON s.user_id = u.id

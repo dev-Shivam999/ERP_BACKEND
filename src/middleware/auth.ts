@@ -72,3 +72,20 @@ export const isAdmin = (
     }
     next();
 };
+
+// Generic role authorization middleware
+export const authorize = (roles: UserRole[]) => {
+    return (req: Request, res: Response, next: NextFunction): void => {
+        if (!req.user) {
+            errorResponse(res, 'Authentication required', 401);
+            return;
+        }
+
+        if (!roles.includes(req.user.role as UserRole)) {
+            errorResponse(res, 'Access denied', 403);
+            return;
+        }
+
+        next();
+    };
+};

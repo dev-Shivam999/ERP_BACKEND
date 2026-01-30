@@ -1,7 +1,7 @@
 import express, { Application } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import { config, testConnection } from './config';
+import { config, testConnection, getClient } from './config';
 import { notFoundHandler, errorHandler } from './middleware';
 
 // Import routes
@@ -18,6 +18,7 @@ import installmentRoutes from './routes/installment.routes';
 import resultRoutes from './routes/result.routes';
 import homeworkRoutes from './routes/homework.routes';
 import payrollRoutes from './routes/payroll.routes';
+import certificateRoutes from './routes/certificate.routes';
 
 const app: Application = express();
 
@@ -53,6 +54,7 @@ app.use('/api/installments', installmentRoutes);
 app.use('/api/results', resultRoutes);
 app.use('/api/homework', homeworkRoutes);
 app.use('/api/payroll', payrollRoutes);
+app.use('/api/certificates', certificateRoutes);
 
 // Error handling
 app.use(notFoundHandler);
@@ -62,6 +64,7 @@ app.use(errorHandler);
 const startServer = async () => {
     try {
         // Test database connection
+    getClient().then(async()=>{
         const isConnected = await testConnection();
 
         if (!isConnected) {
@@ -81,6 +84,7 @@ const startServer = async () => {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       `);
         });
+    })
     } catch (error) {
         console.error('❌ Failed to start server:', error);
         process.exit(1);

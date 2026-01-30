@@ -121,6 +121,18 @@ CREATE TABLE IF NOT EXISTS subjects (
   is_optional BOOLEAN DEFAULT false,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS timetable_periods (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  period_number INTEGER NOT NULL,
+  start_time TIME NOT NULL,
+  end_time TIME NOT NULL,
+  is_break BOOLEAN DEFAULT false,
+  break_name VARCHAR(50),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(school_id, period_number)
+);
 `;
 
 // ============================================
@@ -638,23 +650,23 @@ CREATE INDEX IF NOT EXISTS idx_student_homework_student ON student_homework(stud
 // ============================================
 export const addBloodGroupToProfiles = () => `
 -- Ensure blood_group_type exists (it might if students table was created)
-DO $ 
+DO $$ 
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'blood_group_type') THEN
         CREATE TYPE blood_group_type AS ENUM ('A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-');
     END IF;
-END $;
+END $$;
 
 -- Add blood_group to user_profiles if missing
-DO $ 
+DO $$ 
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_profiles' AND column_name = 'blood_group') THEN
         ALTER TABLE user_profiles ADD COLUMN blood_group blood_group_type;
     END IF;
-END $;
+END $$;
 
 -- Optional: Move data if it exists in students (and then remove column)
-DO $ 
+DO $$ 
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'students' AND column_name = 'blood_group') THEN
         -- Transfer data
@@ -666,17 +678,17 @@ BEGIN
         -- Remove column from students
         ALTER TABLE students DROP COLUMN blood_group;
     END IF;
-END $;
+END $$;
 `;
 
 export const addPermissionsToUsers = () => `
 -- Add permissions to users if missing
-DO $ 
+DO $$ 
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'permissions') THEN
         ALTER TABLE users ADD COLUMN permissions JSONB DEFAULT '{}';
     END IF;
-END $;
+END $$;
 `;
 
 // ============================================
@@ -768,9 +780,6 @@ END $$;
 `;
 
 // ============================================
-// ALL TABLES EXPORT
-// ============================================
-// ============================================
 // 17. ADMIT CARDS
 // ============================================
 export const admitCards = () => `
@@ -786,6 +795,30 @@ CREATE TABLE IF NOT EXISTS admit_cards (
 `;
 
 // ============================================
+// 18. CERTIFICATE REQUESTS
+// ============================================
+export const certificateRequests = () => `
+CREATE TYPE certificate_type AS ENUM ('study', 'character', 'transfer', 'no_dues');
+CREATE TYPE certificate_status AS ENUM ('pending', 'accepted', 'rejected');
+
+CREATE TABLE IF NOT EXISTS certificate_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+    student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+    certificate_type certificate_type NOT NULL,
+    reason TEXT NOT NULL,
+    status certificate_status DEFAULT 'pending',
+    admin_remarks TEXT,
+    accepted_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_certificate_requests_student ON certificate_requests(student_id);
+CREATE INDEX idx_certificate_requests_status ON certificate_requests(status);
+`;
+
+// ============================================
 // ALL TABLES EXPORT
 // ============================================
 export const allTables = [
@@ -794,6 +827,20 @@ export const allTables = [
   { name: '02a_add_blood_group_to_profiles', sql: addBloodGroupToProfiles },
   { name: '02b_add_permissions_to_users', sql: addPermissionsToUsers },
   { name: '03_academic_structure', sql: academicStructure },
+  {
+    name: '03a_timetable_periods', sql: () => `
+    CREATE TABLE IF NOT EXISTS timetable_periods (
+      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+      school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      period_number INTEGER NOT NULL,
+      start_time TIME NOT NULL,
+      end_time TIME NOT NULL,
+      is_break BOOLEAN DEFAULT false,
+      break_name VARCHAR(50),
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(school_id, period_number)
+    );
+  ` },
   { name: '04_students', sql: students },
   { name: '05_attendance', sql: attendance },
   { name: '06_fees', sql: fees },
@@ -803,10 +850,11 @@ export const allTables = [
   { name: '10_results_management', sql: resultsManagement },
   { name: '11_grade_calculation_functions', sql: gradeCalculationFunctions },
   { name: '12_homework', sql: homework },
-  { name: '13_update_homework_status', sql: updateHomeworkStatusCheck },
+  { name: '13_update_homework_status_check', sql: updateHomeworkStatusCheck },
   { name: '14_payroll', sql: payroll },
   { name: '15_add_onesignal_id_to_users', sql: addOneSignalIdToUsers },
   { name: '15a_add_fcm_token_to_users', sql: addFcmTokenToUsers },
   { name: '16_add_updated_at_to_exams', sql: addUpdatedAtToExams },
   { name: '17_admit_cards', sql: admitCards },
+  { name: '18_certificate_requests', sql: certificateRequests },
 ];

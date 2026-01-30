@@ -27,8 +27,8 @@ attendance_stats AS (
 ),
 fee_stats AS (
   SELECT 
-    COALESCE(SUM(amount_paid), 0) as today_collection,
-    COALESCE(SUM(amount_pending) FILTER (WHERE status IN ('pending', 'overdue')), 0) as total_pending
+    COALESCE(SUM(fp.amount_paid), 0) as today_collection,
+    COALESCE(SUM(sf.amount_pending) FILTER (WHERE sf.status IN ('pending', 'overdue')), 0) as total_pending
   FROM student_fees sf
   LEFT JOIN fee_payments fp ON sf.id = fp.student_fee_id AND fp.payment_date = CURRENT_DATE
 ),
@@ -178,9 +178,9 @@ WHERE s.status = 'active';
 // ALL VIEWS EXPORT
 // ============================================
 export const allViews = [
-    { name: 'vw_admin_dashboard', sql: vwAdminDashboard },
-    { name: 'vw_class_attendance_summary', sql: vwClassAttendanceSummary },
-    { name: 'vw_fee_defaulters', sql: vwFeeDefaulters },
-    { name: 'vw_fee_collection_daily', sql: vwFeeCollectionDaily },
-    { name: 'vw_student_dashboard', sql: vwStudentDashboard },
+  { name: 'vw_admin_dashboard', sql: vwAdminDashboard },
+  { name: 'vw_class_attendance_summary', sql: vwClassAttendanceSummary },
+  { name: 'vw_fee_defaulters', sql: vwFeeDefaulters },
+  { name: 'vw_fee_collection_daily', sql: vwFeeCollectionDaily },
+  { name: 'vw_student_dashboard', sql: vwStudentDashboard },
 ];
