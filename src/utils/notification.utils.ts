@@ -1,6 +1,7 @@
 import { query, config } from '../config';
 import { PoolClient } from 'pg';
 
+import { messaging } from '../config/firebase'
 /**
  * Sends a notification to a single student if they are active.
  * 
@@ -50,36 +51,36 @@ export const sendStudentNotification = async (
             [schoolId, title, message, type, priority, student.user_id, createdBy]
         );
 
-        // Send OneSignal Push Notification
+        // Send FCM Push Notification
         try {
-            // Fetch user's OneSignal Player ID
+            // Import messaging from firebase config
+
+            // Fetch user's FCM Token
             const userResult = await dbQuery(
-                `SELECT onesignal_player_id FROM users WHERE id = $1`,
+                `SELECT fcm_token FROM users WHERE id = $1`,
                 [student.user_id]
             );
 
-            const playerId = userResult.rows[0]?.onesignal_player_id;
+            const fcmToken = userResult.rows[0]?.fcm_token;
 
-            if (playerId && config.oneSignal.appId && config.oneSignal.apiKey) {
-                const oneSignalPayload = {
-                    app_id: config.oneSignal.appId,
-                    include_player_ids: [playerId],
-                    headings: { en: title },
-                    contents: { en: message },
-                    data: { type, studentId }
+            if (fcmToken) {
+                const messagePayload = {
+                    notification: {
+                        title: title,
+                        body: message,
+                    },
+                    data: {
+                        type,
+                        studentId,
+                    },
+                    token: fcmToken,
                 };
 
-                await fetch('https://onesignal.com/api/v1/notifications', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Basic ${config.oneSignal.apiKey}`
-                    },
-                    body: JSON.stringify(oneSignalPayload)
-                });
+                await messaging.send(messagePayload);
+                console.log(`Successfully sent FCM notification to user ${student.user_id}`);
             }
         } catch (pushError) {
-            console.error('Failed to send OneSignal notification:', pushError);
+            console.error('Failed to send FCM notification:', pushError);
             // Don't fail the whole operation if push fails
         }
 

@@ -743,6 +743,19 @@ END $$;
 `;
 
 // ============================================
+// 15a. FCM INTEGRATION
+// ============================================
+export const addFcmTokenToUsers = () => `
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'fcm_token') THEN
+        ALTER TABLE users ADD COLUMN fcm_token TEXT;
+        CREATE INDEX idx_users_fcm_token ON users(fcm_token);
+    END IF;
+END $$;
+`;
+
+// ============================================
 // 16. EXAM UPDATED AT
 // ============================================
 export const addUpdatedAtToExams = () => `
@@ -793,6 +806,7 @@ export const allTables = [
   { name: '13_update_homework_status', sql: updateHomeworkStatusCheck },
   { name: '14_payroll', sql: payroll },
   { name: '15_add_onesignal_id_to_users', sql: addOneSignalIdToUsers },
+  { name: '15a_add_fcm_token_to_users', sql: addFcmTokenToUsers },
   { name: '16_add_updated_at_to_exams', sql: addUpdatedAtToExams },
   { name: '17_admit_cards', sql: admitCards },
 ];

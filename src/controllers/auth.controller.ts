@@ -309,28 +309,28 @@ export const updateUserPermissions = [
     },
 ];
 
-// Update OneSignal Player ID
-export const updatePlayerId = [
+// Update FCM Token
+export const updateFcmToken = [
     authenticate,
     async (req: Request, res: Response): Promise<void> => {
         try {
             const userId = req.user?.userId;
-            const { playerId } = req.body;
+            const { fcmToken } = req.body;
 
-            if (!playerId) {
-                errorResponse(res, 'Player ID is required', 400);
+            if (!fcmToken) {
+                errorResponse(res, 'FCM token is required', 400);
                 return;
             }
 
             await query(
-                'UPDATE users SET onesignal_player_id = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-                [playerId, userId]
+                'UPDATE users SET fcm_token = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+                [fcmToken, userId]
             );
 
-            successResponse(res, 'Player ID updated successfully');
+            successResponse(res, 'FCM token updated successfully');
         } catch (error) {
-            console.error('Update player ID error:', error);
-            errorResponse(res, 'Failed to update player ID', 500);
+            console.error('Update FCM token error:', error);
+            errorResponse(res, 'Failed to update FCM token', 500);
         }
     },
 ];
