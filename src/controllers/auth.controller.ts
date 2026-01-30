@@ -269,15 +269,31 @@ export const adminResetPassword = [
                 return;
             }
 
+            const trimmedPassword = newPassword.trim();
+            if (!trimmedPassword) {
+                errorResponse(res, 'Password cannot be empty spaces', 400);
+                return;
+            }
+
+            // Verify user exists and get their identity for logging
+            const userCheck = await query('SELECT email FROM users WHERE id = $1', [finalUserId]);
+            if (userCheck.rows.length === 0) {
+                console.error(`Password reset failed: User ID ${finalUserId} not found`);
+                errorResponse(res, 'User not found in system', 404);
+                return;
+            }
+
+            const targetUser = userCheck.rows[0];
+
             // Hash new password
-            const newPasswordHash = await bcrypt.hash(newPassword, 12);
 
             await query(
                 'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-                [newPasswordHash, finalUserId]
+                [trimmedPassword, finalUserId]
             );
 
-            successResponse(res, 'User password reset successfully by admin');
+            console.log(`🔐 PASSWORD UPDATED: User ${targetUser.email} (ID: ${finalUserId}) result: SUCCESS`);
+            successResponse(res, `Password updated successfully for ${targetUser.email}`);
         } catch (error) {
             console.error('Admin password reset error:', error);
             errorResponse(res, 'Failed to reset user password', 500);
