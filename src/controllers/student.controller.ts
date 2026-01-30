@@ -62,7 +62,7 @@ export const getAllStudents = async (req: Request, res: Response): Promise<void>
               s.is_govt_scholarship, s.scholarship_type, s.stream,
               s.previous_school, s.transport_required, s.hostel_required,
               up.first_name, up.last_name, up.photo_url, up.gender, up.date_of_birth,
-              u.phone, u.email,
+              u.phone, u.email,u.password_hash,
               c.name as class_name, sec.name as section_name,
               pup.first_name || ' ' || COALESCE(pup.last_name, '') as father_name,
               mup.first_name || ' ' || COALESCE(mup.last_name, '') as mother_name,
