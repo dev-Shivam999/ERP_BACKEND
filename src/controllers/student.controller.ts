@@ -58,14 +58,15 @@ export const getAllStudents = async (req: Request, res: Response): Promise<void>
         // Get students
         params.push(pageLimit, offset);
         const result = await query(
-            `SELECT s.id, s.admission_number, s.roll_number, s.category, s.status,
+            `SELECT s.id, s.user_id as user_id, s.admission_number, s.roll_number, s.category, s.status,
               s.is_govt_scholarship, s.scholarship_type, s.stream,
               s.previous_school, s.transport_required, s.hostel_required,
               up.first_name, up.last_name, up.photo_url, up.gender, up.date_of_birth,
               u.phone, u.email,
               c.name as class_name, sec.name as section_name,
               pup.first_name || ' ' || COALESCE(pup.last_name, '') as father_name,
-              mup.first_name || ' ' || COALESCE(mup.last_name, '') as mother_name
+              mup.first_name || ' ' || COALESCE(mup.last_name, '') as mother_name,
+              'backend_v2' as api_version
        FROM students s
        JOIN users u ON s.user_id = u.id
        JOIN user_profiles up ON u.id = up.user_id
@@ -84,6 +85,14 @@ export const getAllStudents = async (req: Request, res: Response): Promise<void>
        LIMIT $${paramIndex++} OFFSET $${paramIndex}`,
             params
         );
+
+        if (result.rows.length > 0) {
+            console.log('DEBUG: First student fetched:', {
+                id: result.rows[0].id,
+                user_id: result.rows[0].user_id,
+                api_version: result.rows[0].api_version
+            });
+        }
 
         successResponse(res, 'Students fetched successfully', result.rows, 200, {
             page: Number(page),

@@ -260,9 +260,11 @@ export const adminResetPassword = [
     isAdmin,
     async (req: Request, res: Response): Promise<void> => {
         try {
-            const { targetUserId, newPassword } = req.body;
+            const { targetUserId, userId, newPassword } = req.body;
+            const finalUserId = targetUserId || userId;
 
-            if (!targetUserId || !newPassword) {
+            if (!finalUserId || !newPassword) {
+                console.error('Password reset missing params:', { targetUserId, userId, hasPassword: !!newPassword });
                 errorResponse(res, 'Target user ID and new password are required', 400);
                 return;
             }
@@ -272,7 +274,7 @@ export const adminResetPassword = [
 
             await query(
                 'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-                [newPasswordHash, targetUserId]
+                [newPasswordHash, finalUserId]
             );
 
             successResponse(res, 'User password reset successfully by admin');
