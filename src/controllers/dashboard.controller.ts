@@ -116,6 +116,12 @@ export const getStats = [
                 [schoolId]
             );
 
+            // Pending Certificate Requests
+            const pendingCertificatesResult = await query(
+                `SELECT COUNT(*) as total FROM certificate_requests WHERE school_id = $1 AND status = 'pending'`,
+                [schoolId]
+            );
+
             const stats = {
                 totalStudents: feeSummary.totalStudents,
                 attendance: {
@@ -133,6 +139,7 @@ export const getStats = [
                 pendingFees: feeSummary.totalPending,
                 yearlyCollection: feeSummary.yearlyCollection,
                 totalTeachers: parseInt(teachersResult.rows[0]?.total || '0'),
+                pendingCertificates: parseInt(pendingCertificatesResult.rows[0]?.total || '0'),
                 recentAdmissions: recentAdmissionsResult.rows.map((row: any) => ({
                     id: row.id,
                     admissionNumber: row.admission_number,

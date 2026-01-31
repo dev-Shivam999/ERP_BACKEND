@@ -475,7 +475,8 @@ CREATE TABLE IF NOT EXISTS result_sessions (
   published_at TIMESTAMP WITH TIME ZONE,
   published_by UUID REFERENCES users(id),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(school_id, exam_id)
 );
 
 CREATE TABLE IF NOT EXISTS student_results (
@@ -607,37 +608,49 @@ CREATE OR REPLACE TRIGGER subject_marks_update_totals
   FOR EACH ROW EXECUTE FUNCTION trigger_update_result_totals();
 `;
 
+export const fixResultSessionsUniqueConstraint = () => `
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint 
+        WHERE conname = 'unique_school_exam'
+    ) THEN
+        ALTER TABLE result_sessions ADD CONSTRAINT unique_school_exam UNIQUE (school_id, exam_id);
+    END IF;
+END $$;
+`;
+
 // ============================================
 // 12. HOMEWORK
 // ============================================
 export const homework = () => `
-CREATE TABLE IF NOT EXISTS homework (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
-    class_id UUID NOT NULL REFERENCES classes(id),
-    section_id UUID NOT NULL REFERENCES sections(id),
-    subject_id UUID NOT NULL REFERENCES subjects(id),
-    teacher_id UUID NOT NULL REFERENCES teachers(id),
-    title VARCHAR(255) NOT NULL,
-    description TEXT,
-    due_date DATE NOT NULL,
-    attachment_url TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS homework(
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  class_id UUID NOT NULL REFERENCES classes(id),
+  section_id UUID NOT NULL REFERENCES sections(id),
+  subject_id UUID NOT NULL REFERENCES subjects(id),
+  teacher_id UUID NOT NULL REFERENCES teachers(id),
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  due_date DATE NOT NULL,
+  attachment_url TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS student_homework (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    homework_id UUID NOT NULL REFERENCES homework(id) ON DELETE CASCADE,
-    student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
-    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'completed', 'submitted', 'late')),
-    submission_text TEXT,
-    submission_url TEXT,
-    submitted_at TIMESTAMP WITH TIME ZONE,
-    remarks TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(homework_id, student_id)
+CREATE TABLE IF NOT EXISTS student_homework(
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  homework_id UUID NOT NULL REFERENCES homework(id) ON DELETE CASCADE,
+  student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  status VARCHAR(20) DEFAULT 'pending' CHECK(status IN('pending', 'completed', 'submitted', 'late')),
+  submission_text TEXT,
+  submission_url TEXT,
+  submitted_at TIMESTAMP WITH TIME ZONE,
+  remarks TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(homework_id, student_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_homework_class_section ON homework(class_id, section_id);
@@ -649,43 +662,43 @@ CREATE INDEX IF NOT EXISTS idx_student_homework_student ON student_homework(stud
 // MIGRATIONS & PATCHES
 // ============================================
 export const addBloodGroupToProfiles = () => `
--- Ensure blood_group_type exists (it might if students table was created)
-DO $$ 
+--Ensure blood_group_type exists(it might if students table was created)
+DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'blood_group_type') THEN
-        CREATE TYPE blood_group_type AS ENUM ('A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-');
+    IF NOT EXISTS(SELECT 1 FROM pg_type WHERE typname = 'blood_group_type') THEN
+        CREATE TYPE blood_group_type AS ENUM('A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-');
     END IF;
 END $$;
 
--- Add blood_group to user_profiles if missing
-DO $$ 
+--Add blood_group to user_profiles if missing
+DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'user_profiles' AND column_name = 'blood_group') THEN
+    IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'user_profiles' AND column_name = 'blood_group') THEN
         ALTER TABLE user_profiles ADD COLUMN blood_group blood_group_type;
     END IF;
 END $$;
 
--- Optional: Move data if it exists in students (and then remove column)
-DO $$ 
+--Optional: Move data if it exists in students(and then remove column)
+DO $$
 BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'students' AND column_name = 'blood_group') THEN
-        -- Transfer data
+    IF EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'students' AND column_name = 'blood_group') THEN
+--Transfer data
         UPDATE user_profiles up
         SET blood_group = s.blood_group
         FROM students s
         WHERE up.user_id = s.user_id AND s.blood_group IS NOT NULL;
-        
-        -- Remove column from students
+
+--Remove column from students
         ALTER TABLE students DROP COLUMN blood_group;
     END IF;
 END $$;
 `;
 
 export const addPermissionsToUsers = () => `
--- Add permissions to users if missing
-DO $$ 
+--Add permissions to users if missing
+DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'permissions') THEN
+    IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'permissions') THEN
         ALTER TABLE users ADD COLUMN permissions JSONB DEFAULT '{}';
     END IF;
 END $$;
@@ -698,19 +711,19 @@ export const updateHomeworkStatusCheck = () => `
 DO $$
 DECLARE constraint_name text;
 BEGIN
-    -- Find existing check constraint on status column
+--Find existing check constraint on status column
     SELECT conname INTO constraint_name
     FROM pg_constraint
     WHERE conrelid = 'student_homework'::regclass AND contype = 'c' AND conname LIKE '%status%';
-    
-    -- Drop it if found
+
+--Drop it if found
     IF constraint_name IS NOT NULL THEN
         EXECUTE 'ALTER TABLE student_homework DROP CONSTRAINT ' || constraint_name;
     END IF;
-    
-    -- Add new constraint with additional statuses
-    ALTER TABLE student_homework ADD CONSTRAINT student_homework_status_check 
-    CHECK (status IN ('pending', 'completed', 'submitted', 'late', 'not_completed', 'not_started'));
+
+--Add new constraint with additional statuses
+    ALTER TABLE student_homework ADD CONSTRAINT student_homework_status_check
+CHECK(status IN('pending', 'completed', 'submitted', 'late', 'not_completed', 'not_started'));
 END $$;
 `;
 
@@ -718,23 +731,23 @@ END $$;
 // 14. PAYROLL
 // ============================================
 export const payroll = () => `
-CREATE TABLE IF NOT EXISTS payroll (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
-    teacher_id UUID NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
-    month INTEGER NOT NULL CHECK (month BETWEEN 1 AND 12),
-    year INTEGER NOT NULL,
-    basic_salary DECIMAL(10, 2) NOT NULL DEFAULT 0,
-    allowances DECIMAL(10, 2) DEFAULT 0,
-    deductions DECIMAL(10, 2) DEFAULT 0,
-    net_salary DECIMAL(10, 2) NOT NULL,
-    payment_date DATE,
-    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'hold')),
-    payslip_url TEXT,
-    remarks TEXT,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(teacher_id, month, year)
+CREATE TABLE IF NOT EXISTS payroll(
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  teacher_id UUID NOT NULL REFERENCES teachers(id) ON DELETE CASCADE,
+  month INTEGER NOT NULL CHECK(month BETWEEN 1 AND 12),
+  year INTEGER NOT NULL,
+  basic_salary DECIMAL(10, 2) NOT NULL DEFAULT 0,
+  allowances DECIMAL(10, 2) DEFAULT 0,
+  deductions DECIMAL(10, 2) DEFAULT 0,
+  net_salary DECIMAL(10, 2) NOT NULL,
+  payment_date DATE,
+  status VARCHAR(20) DEFAULT 'pending' CHECK(status IN('pending', 'paid', 'hold')),
+  payslip_url TEXT,
+  remarks TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(teacher_id, month, year)
 );
 
 CREATE INDEX IF NOT EXISTS idx_payroll_teacher ON payroll(teacher_id);
@@ -747,7 +760,7 @@ CREATE INDEX IF NOT EXISTS idx_payroll_period ON payroll(month, year);
 export const addOneSignalIdToUsers = () => `
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'onesignal_player_id') THEN
+    IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'onesignal_player_id') THEN
         ALTER TABLE users ADD COLUMN onesignal_player_id TEXT;
         CREATE INDEX idx_users_onesignal_id ON users(onesignal_player_id);
     END IF;
@@ -760,7 +773,7 @@ END $$;
 export const addFcmTokenToUsers = () => `
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'fcm_token') THEN
+    IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'fcm_token') THEN
         ALTER TABLE users ADD COLUMN fcm_token TEXT;
         CREATE INDEX idx_users_fcm_token ON users(fcm_token);
     END IF;
@@ -773,7 +786,7 @@ END $$;
 export const addUpdatedAtToExams = () => `
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'exams' AND column_name = 'updated_at') THEN
+    IF NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name = 'exams' AND column_name = 'updated_at') THEN
         ALTER TABLE exams ADD COLUMN updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP;
     END IF;
 END $$;
@@ -783,14 +796,14 @@ END $$;
 // 17. ADMIT CARDS
 // ============================================
 export const admitCards = () => `
-CREATE TABLE IF NOT EXISTS admit_cards (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    exam_id UUID NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
-    student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
-    generated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    status VARCHAR(20) DEFAULT 'issued' CHECK (status IN ('issued', 'blocked', 'revoked')),
-    remarks TEXT,
-    UNIQUE(exam_id, student_id)
+CREATE TABLE IF NOT EXISTS admit_cards(
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  exam_id UUID NOT NULL REFERENCES exams(id) ON DELETE CASCADE,
+  student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  generated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  status VARCHAR(20) DEFAULT 'issued' CHECK(status IN('issued', 'blocked', 'revoked')),
+  remarks TEXT,
+  UNIQUE(exam_id, student_id)
 );
 `;
 
@@ -798,20 +811,20 @@ CREATE TABLE IF NOT EXISTS admit_cards (
 // 18. CERTIFICATE REQUESTS
 // ============================================
 export const certificateRequests = () => `
-CREATE TYPE certificate_type AS ENUM ('study', 'character', 'transfer', 'no_dues');
-CREATE TYPE certificate_status AS ENUM ('pending', 'accepted', 'rejected');
+CREATE TYPE certificate_type AS ENUM('study', 'character', 'transfer', 'no_dues');
+CREATE TYPE certificate_status AS ENUM('pending', 'accepted', 'rejected');
 
-CREATE TABLE IF NOT EXISTS certificate_requests (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
-    student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
-    certificate_type certificate_type NOT NULL,
-    reason TEXT NOT NULL,
-    status certificate_status DEFAULT 'pending',
-    admin_remarks TEXT,
-    accepted_at TIMESTAMP WITH TIME ZONE,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS certificate_requests(
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  certificate_type certificate_type NOT NULL,
+  reason TEXT NOT NULL,
+  status certificate_status DEFAULT 'pending',
+  admin_remarks TEXT,
+  accepted_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_certificate_requests_student ON certificate_requests(student_id);
@@ -829,18 +842,18 @@ export const allTables = [
   { name: '03_academic_structure', sql: academicStructure },
   {
     name: '03a_timetable_periods', sql: () => `
-    CREATE TABLE IF NOT EXISTS timetable_periods (
-      id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-      school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
-      period_number INTEGER NOT NULL,
-      start_time TIME NOT NULL,
-      end_time TIME NOT NULL,
-      is_break BOOLEAN DEFAULT false,
-      break_name VARCHAR(50),
-      created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(school_id, period_number)
-    );
-  ` },
+    CREATE TABLE IF NOT EXISTS timetable_periods(
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  period_number INTEGER NOT NULL,
+  start_time TIME NOT NULL,
+  end_time TIME NOT NULL,
+  is_break BOOLEAN DEFAULT false,
+  break_name VARCHAR(50),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(school_id, period_number)
+);
+` },
   { name: '04_students', sql: students },
   { name: '05_attendance', sql: attendance },
   { name: '06_fees', sql: fees },
@@ -848,6 +861,7 @@ export const allTables = [
   { name: '08_exams', sql: exams },
   { name: '09_notifications', sql: notifications },
   { name: '10_results_management', sql: resultsManagement },
+  { name: '10a_fix_result_sessions_unique', sql: fixResultSessionsUniqueConstraint },
   { name: '11_grade_calculation_functions', sql: gradeCalculationFunctions },
   { name: '12_homework', sql: homework },
   { name: '13_update_homework_status_check', sql: updateHomeworkStatusCheck },

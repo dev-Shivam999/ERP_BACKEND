@@ -116,8 +116,8 @@ export const updateRequestStatus = async (req: Request, res: Response): Promise<
 
         const result = await query(
             `UPDATE certificate_requests 
-             SET status = $1, admin_remarks = $2, 
-                 accepted_at = CASE WHEN $1 = 'accepted' THEN CURRENT_TIMESTAMP ELSE accepted_at END,
+             SET status = $1::certificate_status, admin_remarks = $2, 
+                 accepted_at = CASE WHEN $1::certificate_status = 'accepted' THEN CURRENT_TIMESTAMP ELSE accepted_at END,
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = $3 RETURNING *`,
             [status, adminRemarks, id]

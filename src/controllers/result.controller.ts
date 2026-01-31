@@ -5,7 +5,12 @@ import { successResponse, errorResponse } from '../utils';
 // Helper function to parse sessionId
 const parseSessionId = (sessionId: string | string[]): [string, string] => {
     const sessionIdStr = Array.isArray(sessionId) ? sessionId[0] : sessionId;
-    return sessionIdStr.split('-') as [string, string];
+    const lastDashIdx = sessionIdStr.lastIndexOf('-');
+    if (lastDashIdx === -1) return [sessionIdStr, ''];
+    const examId = sessionIdStr.substring(0, lastDashIdx);
+    const year = sessionIdStr.substring(lastDashIdx + 1);
+    console.log(`📦 PARSING SESSION: RAW="${sessionIdStr}" -> EXAM="${examId}" YEAR="${year}"`);
+    return [examId, year];
 };
 
 // Get all result sessions
@@ -54,18 +59,31 @@ export const createResultSession = async (req: Request, res: Response): Promise<
         const schoolId = req.user?.schoolId;
         const { examId, name, description } = req.body;
 
-        const result = await query(
-            `INSERT INTO result_sessions (school_id, exam_id, name, description)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (school_id, exam_id) DO UPDATE SET 
-                name = EXCLUDED.name,
-                description = EXCLUDED.description,
-                updated_at = CURRENT_TIMESTAMP
-             RETURNING *`,
-            [schoolId, examId, name, description]
+        // Check if session exists
+        const existing = await query(
+            `SELECT * FROM result_sessions WHERE school_id = $1 AND exam_id = $2`,
+            [schoolId, examId]
         );
 
-        successResponse(res, 'Result session created successfully', result.rows[0], 201);
+        let session;
+        if (existing.rows.length > 0) {
+            const updated = await query(
+                `UPDATE result_sessions SET name = $3, description = $4, updated_at = CURRENT_TIMESTAMP 
+                 WHERE id = $1 RETURNING *`,
+                [existing.rows[0].id, schoolId, name, description]
+            );
+            session = updated.rows[0];
+        } else {
+            const result = await query(
+                `INSERT INTO result_sessions (school_id, exam_id, name, description)
+                 VALUES ($1, $2, $3, $4)
+                 RETURNING *`,
+                [schoolId, examId, name, description]
+            );
+            session = result.rows[0];
+        }
+
+        successResponse(res, 'Result session created successfully', session, 201);
     } catch (error) {
         console.error('Create result session error:', error);
         errorResponse(res, 'Failed to create result session', 500);
@@ -76,22 +94,31 @@ export const createResultSession = async (req: Request, res: Response): Promise<
 export const getStudentsForMarkEntry = async (req: Request, res: Response): Promise<void> => {
     try {
         const { sessionId } = req.params;
+        console.log(`🚀 GET STUDENTS FOR MARK ENTRY: sessionId="${sessionId}"`);
         const { classId, sectionId } = req.query;
         const schoolId = req.user?.schoolId;
 
         // Parse sessionId to get examId and year (format: examId-year)
         const [examId, year] = parseSessionId(sessionId);
 
-        // Create or get result session
-        const sessionResult = await query(
-            `INSERT INTO result_sessions (school_id, exam_id, name, description)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (school_id, exam_id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-             RETURNING id`,
-            [schoolId, examId, `${examId} Results ${year}`, `Results for ${year} academic year`]
+        // Get or create result session
+        let sessionRes = await query(
+            `SELECT id FROM result_sessions WHERE school_id = $1 AND exam_id = $2`,
+            [schoolId, examId]
         );
 
-        const actualSessionId = sessionResult.rows[0].id;
+        let actualSessionId;
+        if (sessionRes.rows.length === 0) {
+            const newSession = await query(
+                `INSERT INTO result_sessions (school_id, exam_id, name, description)
+                 VALUES ($1, $2, $3, $4)
+                 RETURNING id`,
+                [schoolId, examId, `${examId} Results ${year}`, `Results for ${year} academic year`]
+            );
+            actualSessionId = newSession.rows[0].id;
+        } else {
+            actualSessionId = sessionRes.rows[0].id;
+        }
 
         let whereClause = '';
         const params: any[] = [schoolId, actualSessionId];
@@ -107,6 +134,16 @@ export const getStudentsForMarkEntry = async (req: Request, res: Response): Prom
             params.push(sectionId);
         }
 
+        console.log('🔍 FETCHING STUDENTS FOR MARK ENTRY:', {
+            schoolId,
+            examId,
+            year,
+            classId,
+            sectionId,
+            actualSessionId,
+            params
+        });
+
         const result = await query(
             `SELECT s.id as student_id, s.admission_number, s.roll_number,
                     up.first_name, up.last_name,
@@ -116,8 +153,8 @@ export const getStudentsForMarkEntry = async (req: Request, res: Response): Prom
              FROM students s
              JOIN users u ON s.user_id = u.id
              JOIN user_profiles up ON u.id = up.user_id
-             JOIN classes c ON s.current_class_id = c.id
-             JOIN sections sec ON s.section_id = sec.id
+             LEFT JOIN classes c ON s.current_class_id = c.id
+             LEFT JOIN sections sec ON s.section_id = sec.id
              LEFT JOIN student_results sr ON s.id = sr.student_id AND sr.result_session_id = $2
              WHERE s.status = 'active' AND u.school_id = $1 ${whereClause}
              ORDER BY s.roll_number, up.first_name`,
@@ -162,16 +199,24 @@ export const enterStudentMarks = async (req: Request, res: Response): Promise<vo
         const [examId, year] = parseSessionId(sessionId);
 
         const result = await transaction(async (client) => {
-            // Create or get result session
-            const sessionResult = await client.query(
-                `INSERT INTO result_sessions (school_id, exam_id, name, description)
-                 VALUES ($1, $2, $3, $4)
-                 ON CONFLICT (school_id, exam_id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-                 RETURNING id`,
-                [schoolId, examId, `${examId} Results ${year}`, `Results for ${year} academic year`]
+            // Get or create result session
+            let sessionRes = await client.query(
+                `SELECT id FROM result_sessions WHERE school_id = $1 AND exam_id = $2`,
+                [schoolId, examId]
             );
 
-            const actualSessionId = sessionResult.rows[0].id;
+            let actualSessionId;
+            if (sessionRes.rows.length === 0) {
+                const newSession = await client.query(
+                    `INSERT INTO result_sessions (school_id, exam_id, name, description)
+                     VALUES ($1, $2, $3, $4)
+                     RETURNING id`,
+                    [schoolId, examId, `${examId} Results ${year}`, `Results for ${year} academic year`]
+                );
+                actualSessionId = newSession.rows[0].id;
+            } else {
+                actualSessionId = sessionRes.rows[0].id;
+            }
 
             // Create or get student result record
             let studentResultId;

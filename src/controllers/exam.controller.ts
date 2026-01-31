@@ -489,7 +489,6 @@ export const getActiveExams = async (req: Request, res: Response): Promise<void>
                  JOIN exam_schedules es ON e.id = es.exam_id
                  JOIN subjects s ON es.subject_id = s.id
                  WHERE e.school_id = $1 
-                   AND e.is_published = true 
                    AND e.end_date >= CURRENT_DATE
                    AND es.class_id = $2
                  GROUP BY e.id, e.name, e.exam_type, e.start_date, e.end_date
@@ -519,7 +518,6 @@ export const getActiveExams = async (req: Request, res: Response): Promise<void>
                     ) as schedule
                  FROM exams e
                  WHERE e.school_id = $1 
-                   AND e.is_published = true
                    AND e.end_date >= CURRENT_DATE
                  ORDER BY e.start_date ASC`,
                 [schoolId]
