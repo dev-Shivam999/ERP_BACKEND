@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate } from '../middleware';
+import { authenticate, adminOnly } from '../middleware';
 import * as notificationController from '../controllers/notification.controller';
 
 const router = Router();
@@ -7,5 +7,9 @@ const router = Router();
 router.use(authenticate);
 
 router.get('/me', notificationController.getMyNotifications);
+
+// Admin routes for FCM testing
+router.get('/fcm-users', adminOnly, notificationController.getUsersWithFcmToken);
+router.post('/send-test', adminOnly, notificationController.sendTestNotification);
 
 export default router;

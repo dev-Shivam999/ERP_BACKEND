@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { query } from '../config/database';
 import { successResponse, errorResponse } from '../utils/response';
+import { messaging } from '../config/firebase';
 
 /**
  * Get notifications for the current user
@@ -39,6 +40,77 @@ export const getMyNotifications = async (req: Request, res: Response): Promise<v
     } catch (error) {
         console.error('Get my notifications error:', error);
         errorResponse(res, 'Failed to fetch notifications', 500);
+    }
+};
+
+/**
+ * Get all users who have FCM tokens (for admin testing panel)
+ */
+export const getUsersWithFcmToken = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const schoolId = req.user?.schoolId;
+
+        const result = await query(
+            `SELECT u.id, u.email, u.phone, u.role, u.fcm_token,
+                    up.first_name, up.last_name, up.photo_url
+             FROM users u
+             LEFT JOIN user_profiles up ON u.id = up.user_id
+             WHERE u.school_id = $1 AND u.fcm_token IS NOT NULL AND u.fcm_token != ''
+             ORDER BY u.role, up.first_name`,
+            [schoolId]
+        );
+
+        successResponse(res, 'Users with FCM tokens fetched', result.rows);
+    } catch (error) {
+        console.error('Get users with FCM token error:', error);
+        errorResponse(res, 'Failed to fetch users', 500);
+    }
+};
+
+/**
+ * Send a test push notification to a specific user
+ */
+export const sendTestNotification = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { userId, title, message } = req.body;
+
+        if (!userId || !title || !message) {
+            errorResponse(res, 'userId, title, and message are required', 400);
+            return;
+        }
+
+        // Fetch user's FCM Token
+        const userResult = await query(
+            `SELECT fcm_token FROM users WHERE id = $1`,
+            [userId]
+        );
+
+        const fcmToken = userResult.rows[0]?.fcm_token;
+
+        if (!fcmToken) {
+            errorResponse(res, 'User does not have an FCM token', 400);
+            return;
+        }
+
+        const messagePayload = {
+            notification: {
+                title,
+                body: message,
+            },
+            data: {
+                type: 'test',
+                sentAt: new Date().toISOString(),
+            },
+            token: fcmToken,
+        };
+
+        const response = await messaging.send(messagePayload);
+        console.log('Test notification sent:', response);
+
+        successResponse(res, 'Test notification sent successfully', { messageId: response });
+    } catch (error: any) {
+        console.error('Send test notification error:', error);
+        errorResponse(res, error.message || 'Failed to send notification', 500);
     }
 };
 

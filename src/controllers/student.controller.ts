@@ -656,18 +656,47 @@ export const getStudentProfile = async (req: Request, res: Response): Promise<vo
         const userId = req.user?.userId;
         const schoolId = req.user?.schoolId;
 
+        // First get the student ID for this user
+        const studentIdResult = await query(
+            `SELECT id FROM students WHERE user_id = $1`,
+            [userId]
+        );
+
+        if (studentIdResult.rows.length === 0) {
+            errorResponse(res, 'Student profile not found', 404);
+            return;
+        }
+
+        const studentId = studentIdResult.rows[0].id;
+
+        // Use the same query as getStudentById
         const result = await query(
-            `SELECT s.id, s.admission_number, s.roll_number,
-               up.first_name, up.last_name, up.photo_url,
-               c.name as class_name, sec.name as section_name,
-               u.email, u.phone
-        FROM students s
-        JOIN users u ON s.user_id = u.id
-        JOIN user_profiles up ON u.id = up.user_id
-        JOIN classes c ON s.current_class_id = c.id
-        JOIN sections sec ON s.section_id = sec.id
-        WHERE s.user_id = $1 AND u.school_id = $2`,
-            [userId, schoolId]
+            `SELECT s.*, up.first_name, up.last_name, up.gender, up.date_of_birth,
+              up.address, up.city, up.state, up.pincode, up.photo_url,
+              up.aadhar_number, up.blood_group, 
+              u.email as email, u.phone as phone,
+              c.name as class_name, sec.name as section_name,
+              ac.name as admission_class_name,
+              fup.first_name as father_name,
+              mup.first_name as mother_name,
+              gup.first_name as guardian_name
+       FROM students s
+       JOIN users u ON s.user_id = u.id
+       JOIN user_profiles up ON u.id = up.user_id
+       JOIN classes c ON s.current_class_id = c.id
+       JOIN classes ac ON s.admission_class_id = ac.id
+       JOIN sections sec ON s.section_id = sec.id
+       LEFT JOIN student_parents fsp ON s.id = fsp.student_id AND fsp.relationship = 'father'
+       LEFT JOIN parents fp ON fsp.parent_id = fp.id
+       LEFT JOIN user_profiles fup ON fp.user_id = fup.user_id
+       LEFT JOIN student_parents msp ON s.id = msp.student_id AND msp.relationship = 'mother'
+       LEFT JOIN parents mp ON msp.parent_id = mp.id
+       LEFT JOIN user_profiles mup ON mp.user_id = mup.user_id
+       LEFT JOIN student_parents gsp ON s.id = gsp.student_id AND gsp.relationship = 'guardian'
+       LEFT JOIN parents gp ON gsp.parent_id = gp.id
+       LEFT JOIN user_profiles gup ON gp.user_id = gup.user_id
+       WHERE s.id = $1 AND u.school_id = $2`,
+            [studentId, schoolId]
         );
 
         if (result.rows.length === 0) {
@@ -675,7 +704,21 @@ export const getStudentProfile = async (req: Request, res: Response): Promise<vo
             return;
         }
 
-        successResponse(res, 'Profile fetched', result.rows[0]);
+        // Get parents
+        const parentsResult = await query(
+            `SELECT p.*, up.first_name, up.last_name, u.phone, u.email, sp.relationship, sp.is_primary_contact
+       FROM student_parents sp
+       JOIN parents p ON sp.parent_id = p.id
+       LEFT JOIN users u ON p.user_id = u.id
+       LEFT JOIN user_profiles up ON u.id = up.user_id
+       WHERE sp.student_id = $1`,
+            [studentId]
+        );
+
+        successResponse(res, 'Profile fetched', {
+            ...result.rows[0],
+            parents: parentsResult.rows,
+        });
     } catch (error) {
         console.error('Get student profile error:', error);
         errorResponse(res, 'Failed to fetch profile', 500);

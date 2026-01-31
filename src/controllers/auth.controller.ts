@@ -45,7 +45,7 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             return;
         }
 
-      
+
 
         // Update last login
         await query(
@@ -341,6 +341,28 @@ export const updateFcmToken = [
         } catch (error) {
             console.error('Update FCM token error:', error);
             errorResponse(res, 'Failed to update FCM token', 500);
+        }
+    },
+];
+
+// Check if FCM token exists for current user
+export const checkFcmToken = [
+    authenticate,
+    async (req: Request, res: Response): Promise<void> => {
+        try {
+            const userId = req.user?.userId;
+
+            const result = await query(
+                'SELECT fcm_token FROM users WHERE id = $1',
+                [userId]
+            );
+
+            const hasToken = !!(result.rows[0]?.fcm_token);
+
+            successResponse(res, 'FCM token status', { hasToken });
+        } catch (error) {
+            console.error('Check FCM token error:', error);
+            errorResponse(res, 'Failed to check FCM token', 500);
         }
     },
 ];
