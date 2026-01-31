@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { query } from '../config';
+import { query, transaction } from '../config/database';
 import { successResponse, errorResponse } from '../utils';
 
 // Get holidays
@@ -61,14 +61,30 @@ export const createHoliday = async (req: Request, res: Response): Promise<void> 
             academicYearId = newAy.rows[0].id;
         }
 
-        const result = await query(
-            `INSERT INTO holidays (school_id, academic_year_id, title, holiday_type, start_date, end_date, description, declared_by)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-             RETURNING *`,
-            [schoolId, academicYearId, title, holidayType, startDate, endDate || startDate, description, userId]
-        );
+        const result = await transaction(async (client) => {
+            const hRes = await client.query(
+                `INSERT INTO holidays (school_id, academic_year_id, title, holiday_type, start_date, end_date, description, declared_by)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                 RETURNING *`,
+                [schoolId, academicYearId, title, holidayType, startDate, endDate || startDate, description, userId]
+            );
 
-        successResponse(res, 'Holiday created successfully', result.rows[0], 201);
+            // Send notification to everyone (target_type = 'all')
+            await client.query(
+                `INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, created_by)
+                 VALUES ($1, $2, $3, 'holiday', 'normal', 'all', $4)`,
+                [
+                    schoolId,
+                    `छुट्टी की घोषणा: ${title} / Holiday Declared: ${title}`,
+                    `विद्यालय में ${title} की छुट्टी घोषित की गई है। विवरण मोबाइल ऐप पर देखें। / A holiday has been declared for ${title}. Please check the mobile app for details.`,
+                    userId
+                ]
+            );
+
+            return hRes.rows[0];
+        });
+
+        successResponse(res, 'Holiday created successfully', result, 201);
     } catch (error) {
         console.error('Create holiday error:', error);
         errorResponse(res, 'Failed to create holiday', 500);

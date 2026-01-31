@@ -5,6 +5,13 @@ import { successResponse, errorResponse } from '../utils';
 // Helper function to parse sessionId
 const parseSessionId = (sessionId: string | string[]): [string, string] => {
     const sessionIdStr = Array.isArray(sessionId) ? sessionId[0] : sessionId;
+
+    // Check if it's already a full UUID (direct result_session_id)
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidRegex.test(sessionIdStr)) {
+        return [sessionIdStr, 'IS_UUID'];
+    }
+
     const lastDashIdx = sessionIdStr.lastIndexOf('-');
     if (lastDashIdx === -1) return [sessionIdStr, ''];
     const examId = sessionIdStr.substring(0, lastDashIdx);
@@ -160,6 +167,14 @@ export const getStudentsForMarkEntry = async (req: Request, res: Response): Prom
              ORDER BY s.roll_number, up.first_name`,
             params
         );
+
+        console.log(`✅ FOUND ${result.rows.length} STUDENTS FOR MARK ENTRY`);
+        if (result.rows.length > 0) {
+            console.log('Sample student:', {
+                id: result.rows[0].student_id,
+                name: `${result.rows[0].first_name} ${result.rows[0].last_name}`
+            });
+        }
 
         successResponse(res, 'Students fetched successfully', result.rows);
     } catch (error) {
@@ -508,11 +523,26 @@ export const publishResults = async (req: Request, res: Response): Promise<void>
                                 'आपके बच्चे का परीक्षा परिणाम तैयार है। कृपया मोबाइल ऐप देखें। Your child''s exam result is ready. Please check the mobile app.',
                                 'result', 'high', 'individual',
                                 jsonb_build_array(p.user_id),
-                                $3
+                                $2
                          FROM students s
                          JOIN users u ON s.user_id = u.id
                          JOIN student_parents sp ON s.id = sp.student_id AND sp.is_primary_contact = true
                          JOIN parents p ON sp.parent_id = p.id
+                         WHERE s.id = $1 AND s.status = 'active'`,
+                        [student.student_id, userId]
+                    );
+
+                    // Send notification to students
+                    await client.query(
+                        `INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, target_ids, created_by)
+                         SELECT u.school_id,
+                                 'परीक्षा परिणाम घोषित / Exam Results Published',
+                                 'आपका परीक्षा परिणाम तैयार है। कृपया परिणाम अनुभाग देखें। Your exam result is ready. Please check the results section.',
+                                 'result', 'high', 'individual',
+                                 jsonb_build_array(s.user_id),
+                                 $2
+                         FROM students s
+                         JOIN users u ON s.user_id = u.id
                          WHERE s.id = $1 AND s.status = 'active'`,
                         [student.student_id, userId]
                     );
@@ -539,21 +569,26 @@ export const getStudentResult = async (req: Request, res: Response): Promise<voi
         const { sessionId, studentId } = req.params;
         const schoolId = req.user?.schoolId;
 
-        // Parse sessionId to get examId and year
+        // Parse sessionId to get actualSessionId
         const [examId, year] = parseSessionId(sessionId);
+        let actualSessionId;
 
-        // Get result session
-        const sessionResult = await query(
-            `SELECT id FROM result_sessions WHERE school_id = $1 AND exam_id = $2`,
-            [schoolId, examId]
-        );
+        if (year === 'IS_UUID') {
+            actualSessionId = examId;
+        } else {
+            // Get result session
+            const sessionResult = await query(
+                `SELECT id FROM result_sessions WHERE school_id = $1 AND exam_id = $2`,
+                [schoolId, examId]
+            );
 
-        if (sessionResult.rows.length === 0) {
-            errorResponse(res, 'Result session not found', 404);
-            return;
+            if (sessionResult.rows.length === 0) {
+                errorResponse(res, 'Result session not found', 404);
+                return;
+            }
+
+            actualSessionId = sessionResult.rows[0].id;
         }
-
-        const actualSessionId = sessionResult.rows[0].id;
 
         const result = await query(
             `SELECT sr.*, rs.name as session_name, rs.status as session_status,
@@ -603,18 +638,57 @@ export const getStudentResult = async (req: Request, res: Response): Promise<voi
 export const getMyResults = async (req: Request, res: Response): Promise<void> => {
     try {
         const userId = req.user?.userId;
+        const role = req.user?.role;
+        console.log(`🔍 [DIAGNOSTIC] Fetching results for UserID=${userId}, Role=${role}`);
+
+        // 1. Check if user is a student directly
+        const studentCheck = await query(`SELECT id, current_class_id FROM students WHERE user_id = $1`, [userId]);
+        console.log(`👤 Student direct match: ${studentCheck.rows.length ? 'YES' : 'NO'} (StudentID: ${studentCheck.rows[0]?.id || 'N/A'})`);
+
+        // 2. Check if user is a parent of any students
+        const parentCheck = await query(
+            `SELECT s.id, s.admission_number FROM student_parents sp 
+             JOIN parents p ON sp.parent_id = p.id 
+             JOIN students s ON sp.student_id = s.id
+             WHERE p.user_id = $1`, [userId]
+        );
+        console.log(`👪 Parent link found for ${parentCheck.rows.length} students`);
+
+        // 3. Find ALL results for these students, regardless of status
+        const allResults = await query(
+            `SELECT sr.id, sr.status, sr.student_id, rs.status as session_status 
+             FROM student_results sr
+             JOIN result_sessions rs ON sr.result_session_id = rs.id
+             JOIN students s ON sr.student_id = s.id
+             WHERE (s.user_id = $1 OR s.id IN (
+                 SELECT student_id FROM student_parents sp
+                 JOIN parents p ON sp.parent_id = p.id
+                 WHERE p.user_id = $1
+             ))`,
+            [userId]
+        );
+        console.log(`📊 TOTAL RESULTS FOR USER (ANY STATUS): ${allResults.rows.length}`);
+        if (allResults.rows.length > 0) {
+            console.log('📝 Statuses found:', allResults.rows.map(r => `Result[${r.id.substring(0, 8)}]: ${r.status}, Session: ${r.session_status}`));
+        }
 
         const result = await query(
             `SELECT sr.*, rs.name as session_name, rs.published_at,
                     e.name as exam_name, e.exam_type,
-                    c.name as class_name, sec.name as section_name
+                    c.name as class_name, sec.name as section_name,
+                    up.first_name, up.last_name
              FROM student_results sr
              JOIN result_sessions rs ON sr.result_session_id = rs.id
              JOIN exams e ON rs.exam_id = e.id
              JOIN students s ON sr.student_id = s.id
+             JOIN user_profiles up ON s.user_id = up.user_id
              JOIN classes c ON sr.class_id = c.id
              JOIN sections sec ON sr.section_id = sec.id
-             WHERE s.user_id = $1 AND sr.status = 'published'
+             WHERE (s.user_id = $1 OR s.id IN (
+                 SELECT student_id FROM student_parents sp
+                 JOIN parents p ON sp.parent_id = p.id
+                 WHERE p.user_id = $1
+             )) AND sr.status = 'published'
              ORDER BY rs.published_at DESC`,
             [userId]
         );

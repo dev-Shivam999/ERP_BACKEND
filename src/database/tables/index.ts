@@ -516,7 +516,8 @@ CREATE TABLE IF NOT EXISTS result_notifications (
   student_id UUID NOT NULL REFERENCES students(id) ON DELETE CASCADE,
   notification_sent BOOLEAN DEFAULT false,
   sent_at TIMESTAMP WITH TIME ZONE,
-  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(result_session_id, student_id)
 );
 
 -- Indexes for performance
@@ -832,6 +833,44 @@ CREATE INDEX idx_certificate_requests_status ON certificate_requests(status);
 `;
 
 // ============================================
+// 19. CALENDAR (HOLIDAYS & EVENTS)
+// ============================================
+export const calendar = () => `
+CREATE TABLE IF NOT EXISTS holidays (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  academic_year_id UUID NOT NULL REFERENCES academic_years(id) ON DELETE CASCADE,
+  title VARCHAR(255) NOT NULL,
+  holiday_type VARCHAR(50),
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  description TEXT,
+  declared_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  school_id UUID NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+  title VARCHAR(255) NOT NULL,
+  event_type VARCHAR(50),
+  start_datetime TIMESTAMP WITH TIME ZONE NOT NULL,
+  end_datetime TIMESTAMP WITH TIME ZONE NOT NULL,
+  location VARCHAR(255),
+  description TEXT,
+  for_classes JSONB,
+  created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_holidays_school ON holidays(school_id);
+CREATE INDEX idx_holidays_academic_year ON holidays(academic_year_id);
+CREATE INDEX idx_events_school ON events(school_id);
+`;
+
+// ============================================
 // ALL TABLES EXPORT
 // ============================================
 export const allTables = [
@@ -871,4 +910,5 @@ export const allTables = [
   { name: '16_add_updated_at_to_exams', sql: addUpdatedAtToExams },
   { name: '17_admit_cards', sql: admitCards },
   { name: '18_certificate_requests', sql: certificateRequests },
+  { name: '19_calendar', sql: calendar },
 ];

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { authenticate, adminOnly, managementAccess, studentAccess } from '../middleware';
+import { authenticate, adminOnly, managementAccess, studentAccess, studentOrParentAccess } from '../middleware';
 import * as resultController from '../controllers/result.controller';
 
 const router = Router();
@@ -17,8 +17,8 @@ router.get('/sessions/:sessionId/results', managementAccess, resultController.ge
 router.post('/sessions/:sessionId/publish', managementAccess, resultController.publishResults);
 router.get('/sessions/:sessionId/statistics', managementAccess, resultController.getResultStatistics);
 
-// Student routes
-router.get('/my-results', studentAccess, resultController.getMyResults);
-router.get('/sessions/:sessionId/students/:studentId', studentAccess, resultController.getStudentResult);
+// Student/Parent routes
+router.get('/my-results', studentOrParentAccess, resultController.getMyResults);
+router.get('/sessions/:sessionId/students/:studentId/result', studentOrParentAccess, resultController.getStudentResult);
 
 export default router;

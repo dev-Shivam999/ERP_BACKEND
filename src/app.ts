@@ -19,13 +19,14 @@ import resultRoutes from './routes/result.routes';
 import homeworkRoutes from './routes/homework.routes';
 import payrollRoutes from './routes/payroll.routes';
 import certificateRoutes from './routes/certificate.routes';
+import notificationRoutes from './routes/notification.routes';
 
 const app: Application = express();
 
 // Security middleware
 app.use(helmet());
 app.use(cors({
-    origin:"*"
+    origin: "*"
 }));
 
 // Body parsing middleware
@@ -57,6 +58,7 @@ app.use('/api/results', resultRoutes);
 app.use('/api/homework', homeworkRoutes);
 app.use('/api/payroll', payrollRoutes);
 app.use('/api/certificates', certificateRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Error handling
 app.use(notFoundHandler);
@@ -66,16 +68,16 @@ app.use(errorHandler);
 const startServer = async () => {
     try {
         // Test database connection
-    getClient().then(async()=>{
-        const isConnected = await testConnection();
+        getClient().then(async () => {
+            const isConnected = await testConnection();
 
-        if (!isConnected) {
-            console.error('❌ Failed to connect to database. Exiting...');
-            process.exit(1);
-        }
+            if (!isConnected) {
+                console.error('❌ Failed to connect to database. Exiting...');
+                process.exit(1);
+            }
 
-        app.listen(config.port, () => {
-            console.log(`
+            app.listen(config.port, () => {
+                console.log(`
 🏫 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
    School ERP System - API Server
    
@@ -85,8 +87,8 @@ const startServer = async () => {
    📁 Database:   ${config.db.name}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
       `);
-        });
-    })
+            });
+        })
     } catch (error) {
         console.error('❌ Failed to start server:', error);
         process.exit(1);
