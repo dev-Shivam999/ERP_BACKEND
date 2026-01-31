@@ -47,7 +47,7 @@ export const getAllTeachers = async (req: Request, res: Response): Promise<void>
             `SELECT t.id, t.user_id, t.employee_id, t.designation, t.qualification, t.experience_years, 
                     t.joining_date, t.status,
                     up.first_name, up.last_name, up.photo_url,
-                    u.email, u.phone, u.permissions
+                    u.email, u.phone, u.permissions,u.password_hash
              FROM teachers t
              JOIN users u ON t.user_id = u.id
              JOIN user_profiles up ON u.id = up.user_id
@@ -183,16 +183,14 @@ export const createTeacher = async (req: Request, res: Response): Promise<void> 
             const count = parseInt(countResult.rows[0].count) + 1;
             const employeeId = `EMP${year}${String(count).padStart(4, '0')}`;
 
-            // Auto-generate password from employee ID
-            const bcrypt = require('bcryptjs');
-            const passwordHash = await bcrypt.hash(employeeId, 12);
+           
 
             // Create user
             const userResult = await client.query(
                 `INSERT INTO users (school_id, email, password_hash, phone, role, permissions)
                  VALUES ($1, $2, $3, $4, 'teacher', $5)
                  RETURNING id`,
-                [schoolId, email.toLowerCase(), passwordHash, phone || null, JSON.stringify(permissions || {})]
+                [schoolId, email.toLowerCase(), employeeId, phone || null, JSON.stringify(permissions || {})]
             );
             const userId = userResult.rows[0].id;
 

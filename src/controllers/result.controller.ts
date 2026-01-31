@@ -183,7 +183,7 @@ export const getStudentsForMarkEntry = async (req: Request, res: Response): Prom
     }
 };
 
-// Get subjects for a class
+// Get subjects for a class (all school subjects)
 export const getSubjectsForClass = async (req: Request, res: Response): Promise<void> => {
     try {
         const schoolId = req.user?.schoolId;
@@ -200,6 +200,40 @@ export const getSubjectsForClass = async (req: Request, res: Response): Promise<
     } catch (error) {
         console.error('Get subjects error:', error);
         errorResponse(res, 'Failed to fetch subjects', 500);
+    }
+};
+
+// Get subjects specifically added to an exam session
+export const getSubjectsForExamSession = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { sessionId } = req.params;
+        const { classId } = req.query;
+        const schoolId = req.user?.schoolId;
+
+        // Parse sessionId to get examId
+        const [examId] = parseSessionId(sessionId);
+
+        let whereClause = 'WHERE es.exam_id = $1 AND sub.school_id = $2';
+        const params: any[] = [examId, schoolId];
+
+        if (classId) {
+            whereClause += ' AND es.class_id = $3';
+            params.push(classId);
+        }
+
+        const result = await query(
+            `SELECT DISTINCT sub.id, sub.name, sub.code, es.max_marks, es.passing_marks
+             FROM exam_schedules es
+             JOIN subjects sub ON es.subject_id = sub.id
+             ${whereClause}
+             ORDER BY sub.name`,
+            params
+        );
+
+        successResponse(res, 'Exam subjects fetched successfully', result.rows);
+    } catch (error) {
+        console.error('Get exam subjects error:', error);
+        errorResponse(res, 'Failed to fetch exam subjects', 500);
     }
 };
 
@@ -278,13 +312,20 @@ export const enterStudentMarks = async (req: Request, res: Response): Promise<vo
                 );
             }
 
-            // Calculate totals and update student result
+            // Calculate totals and update student result based ONLY on subjects in the current exam schedule
             const totals = await client.query(
                 `SELECT 
-                    COALESCE(SUM(max_marks), 0) as total_max,
-                    COALESCE(SUM(obtained_marks), 0) as total_obtained
-                 FROM subject_marks 
-                 WHERE student_result_id = $1`,
+                    COALESCE(SUM(sm.max_marks), 0) as total_max,
+                    COALESCE(SUM(sm.obtained_marks), 0) as total_obtained
+                 FROM subject_marks sm
+                 WHERE sm.student_result_id = $1
+                 AND sm.subject_id IN (
+                     SELECT es.subject_id 
+                     FROM exam_schedules es
+                     JOIN result_sessions rs ON es.exam_id = rs.exam_id
+                     JOIN student_results sr ON sr.result_session_id = rs.id
+                     WHERE sr.id = $1 AND es.class_id = sr.class_id
+                 )`,
                 [studentResultId]
             );
 
@@ -329,6 +370,11 @@ export const getStudentMarks = async (req: Request, res: Response): Promise<void
         const { sessionId, studentId } = req.params;
         const schoolId = req.user?.schoolId;
 
+        if (!sessionId || sessionId === 'undefined' || !studentId || studentId === 'undefined') {
+            errorResponse(res, 'Invalid session or student ID', 400);
+            return;
+        }
+
         // Parse sessionId to get examId and year
         const [examId, year] = parseSessionId(sessionId);
 
@@ -344,30 +390,62 @@ export const getStudentMarks = async (req: Request, res: Response): Promise<void
         const actualSessionId = sessionResult.rows[0].id;
 
         const result = await query(
-            `SELECT sr.*, s.admission_number, s.roll_number,
-                    up.first_name, up.last_name,
-                    c.name as class_name, sec.name as section_name,
-                    json_agg(
-                        json_build_object(
-                            'subject_id', sub.id,
-                            'subject_name', sub.name,
-                            'subject_code', sub.code,
-                            'max_marks', sm.max_marks,
-                            'obtained_marks', sm.obtained_marks,
-                            'grade', sm.grade
-                        ) ORDER BY sub.name
-                    ) as subject_marks
-             FROM student_results sr
-             JOIN students s ON sr.student_id = s.id
-             JOIN users u ON s.user_id = u.id
-             JOIN user_profiles up ON u.id = up.user_id
-             JOIN classes c ON sr.class_id = c.id
-             JOIN sections sec ON sr.section_id = sec.id
-             LEFT JOIN subject_marks sm ON sr.id = sm.student_result_id
-             LEFT JOIN subjects sub ON sm.subject_id = sub.id
-             WHERE sr.result_session_id = $1 AND sr.student_id = $2
-             GROUP BY sr.id, s.admission_number, s.roll_number, up.first_name, up.last_name, c.name, sec.name`,
-            [actualSessionId, studentId]
+            `WITH summary_data AS (
+                SELECT sr.id, sr.student_id, sr.result_session_id, sr.class_id, sr.section_id, sr.status,
+                       COALESCE(summary.total_max, 0) as total_marks,
+                       COALESCE(summary.total_obtained, 0) as obtained_marks,
+                       CASE WHEN COALESCE(summary.total_max, 0) > 0 
+                            THEN ROUND((COALESCE(summary.total_obtained, 0) / summary.total_max) * 100, 2) 
+                            ELSE 0 
+                       END as percentage,
+                       s.admission_number, s.roll_number,
+                       up.first_name, up.last_name,
+                       c.name as class_name, sec.name as section_name
+                FROM student_results sr
+                JOIN students s ON sr.student_id = s.id
+                JOIN users u ON s.user_id = u.id
+                JOIN user_profiles up ON u.id = up.user_id
+                JOIN classes c ON sr.class_id = c.id
+                JOIN sections sec ON sr.section_id = sec.id
+                LEFT JOIN LATERAL (
+                    SELECT 
+                       SUM(es.max_marks) as total_max,
+                       SUM(COALESCE(sm.obtained_marks, 0)) as total_obtained
+                    FROM exam_schedules es
+                    LEFT JOIN subject_marks sm ON sm.student_result_id = sr.id AND sm.subject_id = es.subject_id
+                    WHERE es.exam_id = $2 AND es.class_id = sr.class_id
+                ) summary ON true
+                WHERE sr.result_session_id = $1 AND sr.student_id = $3
+            )
+            SELECT *,
+                   CASE 
+                      WHEN percentage >= 90 THEN 'A+'
+                      WHEN percentage >= 80 THEN 'A'
+                      WHEN percentage >= 70 THEN 'B+'
+                      WHEN percentage >= 60 THEN 'B'
+                      WHEN percentage >= 50 THEN 'C+'
+                      WHEN percentage >= 40 THEN 'C'
+                      WHEN percentage >= 33 THEN 'D'
+                      ELSE 'F'
+                   END as grade,
+                   (
+                       SELECT json_agg(
+                           json_build_object(
+                               'subject_id', sub.id,
+                               'subject_name', sub.name,
+                               'subject_code', sub.code,
+                               'max_marks', es.max_marks,
+                               'obtained_marks', sm.obtained_marks,
+                               'grade', sm.grade
+                           ) ORDER BY sub.name
+                       )
+                       FROM exam_schedules es
+                       JOIN subjects sub ON es.subject_id = sub.id
+                       LEFT JOIN subject_marks sm ON sm.student_result_id = summary_data.id AND sm.subject_id = sub.id
+                       WHERE es.exam_id = $2 AND es.class_id = summary_data.class_id
+                   ) as subject_marks
+            FROM summary_data`,
+            [actualSessionId, examId, studentId]
         );
 
         if (result.rows.length === 0) {
@@ -388,6 +466,11 @@ export const getClassResults = async (req: Request, res: Response): Promise<void
         const { sessionId } = req.params;
         const { classId, sectionId } = req.query;
         const schoolId = req.user?.schoolId;
+
+        if (!sessionId || sessionId === 'undefined') {
+            errorResponse(res, 'Invalid session ID', 400);
+            return;
+        }
 
         // Parse sessionId to get examId and year
         const [examId, year] = parseSessionId(sessionId);
@@ -418,18 +501,47 @@ export const getClassResults = async (req: Request, res: Response): Promise<void
         }
 
         const result = await query(
-            `SELECT sr.*, s.admission_number, s.roll_number,
-                    up.first_name, up.last_name,
-                    c.name as class_name, sec.name as section_name,
-                    ROW_NUMBER() OVER (ORDER BY sr.percentage DESC) as rank
-             FROM student_results sr
-             JOIN students s ON sr.student_id = s.id
-             JOIN users u ON s.user_id = u.id
-             JOIN user_profiles up ON u.id = up.user_id
-             JOIN classes c ON sr.class_id = c.id
-             JOIN sections sec ON sr.section_id = sec.id
-             WHERE sr.result_session_id = $1 ${whereClause}
-             ORDER BY sr.percentage DESC, up.first_name`,
+            `WITH summary_data AS (
+                SELECT sr.id, sr.student_id, sr.result_session_id, sr.class_id, sr.section_id, sr.status,
+                       COALESCE(summary.total_max, 0) as total_marks,
+                       COALESCE(summary.total_obtained, 0) as obtained_marks,
+                       CASE WHEN COALESCE(summary.total_max, 0) > 0 
+                            THEN ROUND((COALESCE(summary.total_obtained, 0) / summary.total_max) * 100, 2) 
+                            ELSE 0 
+                       END as percentage,
+                       s.admission_number, s.roll_number,
+                       up.first_name, up.last_name,
+                       c.name as class_name, sec.name as section_name
+                FROM student_results sr
+                JOIN students s ON sr.student_id = s.id
+                JOIN users u ON s.user_id = u.id
+                JOIN user_profiles up ON u.id = up.user_id
+                JOIN classes c ON sr.class_id = c.id
+                JOIN sections sec ON sr.section_id = sec.id
+                LEFT JOIN LATERAL (
+                    SELECT 
+                       SUM(es.max_marks) as total_max,
+                       SUM(COALESCE(sm.obtained_marks, 0)) as total_obtained
+                    FROM exam_schedules es
+                    LEFT JOIN subject_marks sm ON sm.student_result_id = sr.id AND sm.subject_id = es.subject_id
+                    WHERE es.exam_id = $2 AND es.class_id = sr.class_id
+                ) summary ON true
+                WHERE sr.result_session_id = $1 ${whereClause}
+            )
+            SELECT *,
+                   CASE 
+                      WHEN percentage >= 90 THEN 'A+'
+                      WHEN percentage >= 80 THEN 'A'
+                      WHEN percentage >= 70 THEN 'B+'
+                      WHEN percentage >= 60 THEN 'B'
+                      WHEN percentage >= 50 THEN 'C+'
+                      WHEN percentage >= 40 THEN 'C'
+                      WHEN percentage >= 33 THEN 'D'
+                      ELSE 'F'
+                   END as grade,
+                   ROW_NUMBER() OVER (ORDER BY percentage DESC) as rank
+            FROM summary_data
+            ORDER BY percentage DESC, first_name`,
             params
         );
 
@@ -569,6 +681,11 @@ export const getStudentResult = async (req: Request, res: Response): Promise<voi
         const { sessionId, studentId } = req.params;
         const schoolId = req.user?.schoolId;
 
+        if (!sessionId || sessionId === 'undefined' || !studentId || studentId === 'undefined') {
+            errorResponse(res, 'Invalid session or student ID', 400);
+            return;
+        }
+
         // Parse sessionId to get actualSessionId
         const [examId, year] = parseSessionId(sessionId);
         let actualSessionId;
@@ -576,6 +693,13 @@ export const getStudentResult = async (req: Request, res: Response): Promise<voi
         if (year === 'IS_UUID') {
             actualSessionId = examId;
         } else {
+            // Check if examId is a valid UUID before querying
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            if (!uuidRegex.test(examId)) {
+                errorResponse(res, 'Invalid exam session ID', 400);
+                return;
+            }
+
             // Get result session
             const sessionResult = await query(
                 `SELECT id FROM result_sessions WHERE school_id = $1 AND exam_id = $2`,
@@ -591,34 +715,65 @@ export const getStudentResult = async (req: Request, res: Response): Promise<voi
         }
 
         const result = await query(
-            `SELECT sr.*, rs.name as session_name, rs.status as session_status,
-                    e.name as exam_name, e.exam_type,
-                    s.admission_number, s.roll_number,
-                    up.first_name, up.last_name,
-                    c.name as class_name, sec.name as section_name,
-                    json_agg(
-                        json_build_object(
-                            'subject_name', sub.name,
-                            'subject_code', sub.code,
-                            'max_marks', sm.max_marks,
-                            'obtained_marks', sm.obtained_marks,
-                            'grade', sm.grade,
-                            'percentage', CASE WHEN sm.max_marks > 0 THEN ROUND((sm.obtained_marks / sm.max_marks) * 100, 2) ELSE 0 END
-                        ) ORDER BY sub.name
-                    ) as subject_marks
-             FROM student_results sr
-             JOIN result_sessions rs ON sr.result_session_id = rs.id
-             JOIN exams e ON rs.exam_id = e.id
-             JOIN students s ON sr.student_id = s.id
-             JOIN users u ON s.user_id = u.id
-             JOIN user_profiles up ON u.id = up.user_id
-             JOIN classes c ON sr.class_id = c.id
-             JOIN sections sec ON sr.section_id = sec.id
-             LEFT JOIN subject_marks sm ON sr.id = sm.student_result_id
-             LEFT JOIN subjects sub ON sm.subject_id = sub.id
-             WHERE sr.result_session_id = $1 AND sr.student_id = $2 AND sr.status = 'published'
-             GROUP BY sr.id, rs.name, rs.status, e.name, e.exam_type, s.admission_number, s.roll_number, 
-                      up.first_name, up.last_name, c.name, sec.name`,
+            `WITH summary_data AS (
+                SELECT sr.id, sr.student_id, sr.result_session_id, sr.class_id, sr.section_id, sr.status,
+                       COALESCE(summary.total_max, 0) as total_marks,
+                       COALESCE(summary.total_obtained, 0) as obtained_marks,
+                       CASE WHEN COALESCE(summary.total_max, 0) > 0 
+                            THEN ROUND((COALESCE(summary.total_obtained, 0) / summary.total_max) * 100, 2) 
+                            ELSE 0 
+                       END as percentage,
+                       rs.name as session_name, rs.status as session_status, rs.exam_id,
+                       e.name as exam_name, e.exam_type,
+                       s.admission_number, s.roll_number,
+                       up.first_name, up.last_name,
+                       c.name as class_name, sec.name as section_name
+                FROM student_results sr
+                JOIN result_sessions rs ON sr.result_session_id = rs.id
+                JOIN exams e ON rs.exam_id = e.id
+                JOIN students s ON sr.student_id = s.id
+                JOIN users u ON s.user_id = u.id
+                JOIN user_profiles up ON u.id = up.user_id
+                JOIN classes c ON sr.class_id = c.id
+                JOIN sections sec ON sr.section_id = sec.id
+                LEFT JOIN LATERAL (
+                    SELECT 
+                       SUM(es.max_marks) as total_max,
+                       SUM(COALESCE(sm.obtained_marks, 0)) as total_obtained
+                    FROM exam_schedules es
+                    LEFT JOIN subject_marks sm ON sm.student_result_id = sr.id AND sm.subject_id = es.subject_id
+                    WHERE es.exam_id = rs.exam_id AND es.class_id = sr.class_id
+                ) summary ON true
+                WHERE sr.result_session_id = $1 AND sr.student_id = $2 AND sr.status = 'published'
+            )
+            SELECT *,
+                   CASE 
+                      WHEN percentage >= 90 THEN 'A+'
+                      WHEN percentage >= 80 THEN 'A'
+                      WHEN percentage >= 70 THEN 'B+'
+                      WHEN percentage >= 60 THEN 'B'
+                      WHEN percentage >= 50 THEN 'C+'
+                      WHEN percentage >= 40 THEN 'C'
+                      WHEN percentage >= 33 THEN 'D'
+                      ELSE 'F'
+                   END as grade,
+                   (
+                       SELECT json_agg(
+                           json_build_object(
+                               'subject_name', sub.name,
+                               'subject_code', sub.code,
+                               'max_marks', es.max_marks,
+                               'obtained_marks', COALESCE(sm.obtained_marks, 0),
+                               'grade', sm.grade,
+                               'percentage', CASE WHEN es.max_marks > 0 THEN ROUND((COALESCE(sm.obtained_marks, 0) / es.max_marks) * 100, 2) ELSE 0 END
+                           ) ORDER BY sub.name
+                       )
+                       FROM exam_schedules es
+                       JOIN subjects sub ON es.subject_id = sub.id
+                       LEFT JOIN subject_marks sm ON sm.student_result_id = summary_data.id AND sm.subject_id = es.subject_id
+                       WHERE es.exam_id = summary_data.exam_id AND es.class_id = summary_data.class_id
+                   ) as subject_marks
+            FROM summary_data`,
             [actualSessionId, studentId]
         );
 
@@ -673,23 +828,53 @@ export const getMyResults = async (req: Request, res: Response): Promise<void> =
         }
 
         const result = await query(
-            `SELECT sr.*, rs.name as session_name, rs.published_at,
-                    e.name as exam_name, e.exam_type,
-                    c.name as class_name, sec.name as section_name,
-                    up.first_name, up.last_name
-             FROM student_results sr
-             JOIN result_sessions rs ON sr.result_session_id = rs.id
-             JOIN exams e ON rs.exam_id = e.id
-             JOIN students s ON sr.student_id = s.id
-             JOIN user_profiles up ON s.user_id = up.user_id
-             JOIN classes c ON sr.class_id = c.id
-             JOIN sections sec ON sr.section_id = sec.id
-             WHERE (s.user_id = $1 OR s.id IN (
-                 SELECT student_id FROM student_parents sp
-                 JOIN parents p ON sp.parent_id = p.id
-                 WHERE p.user_id = $1
-             )) AND sr.status = 'published'
-             ORDER BY rs.published_at DESC`,
+            `WITH summary_data AS (
+                SELECT sr.id, sr.status, sr.student_id, sr.result_session_id, sr.class_id, sr.section_id, rs.published_at,
+                       rs.name as session_name,
+                       e.name as exam_name, e.exam_type,
+                       c.name as class_name, sec.name as section_name,
+                       up.first_name, up.last_name,
+                       COALESCE(summary.total_max, 0) as total_marks,
+                       COALESCE(summary.total_obtained, 0) as obtained_marks,
+                       CASE WHEN COALESCE(summary.total_max, 0) > 0 
+                            THEN ROUND((COALESCE(summary.total_obtained, 0) / summary.total_max) * 100, 2) 
+                            ELSE 0 
+                       END as percentage
+                FROM student_results sr
+                JOIN result_sessions rs ON sr.result_session_id = rs.id
+                JOIN exams e ON rs.exam_id = e.id
+                JOIN students s ON sr.student_id = s.id
+                JOIN user_profiles up ON s.user_id = up.user_id
+                JOIN classes c ON sr.class_id = c.id
+                JOIN sections sec ON sr.section_id = sec.id
+                LEFT JOIN LATERAL (
+                    SELECT 
+                       SUM(es.max_marks) as total_max,
+                       SUM(COALESCE(sm.obtained_marks, 0)) as total_obtained
+                    FROM exam_schedules es
+                    LEFT JOIN subject_marks sm ON sm.student_result_id = sr.id AND sm.subject_id = es.subject_id
+                    WHERE es.exam_id = rs.exam_id AND es.class_id = sr.class_id
+                ) summary ON true
+                WHERE (s.user_id = $1 OR s.id IN (
+                    SELECT student_id FROM student_parents sp
+                    JOIN parents p ON sp.parent_id = p.id
+                    WHERE p.user_id = $1
+                )) AND sr.status = 'published'
+            )
+            SELECT *,
+                   CASE 
+                      WHEN percentage >= 90 THEN 'A+'
+                      WHEN percentage >= 80 THEN 'A'
+                      WHEN percentage >= 70 THEN 'B+'
+                      WHEN percentage >= 60 THEN 'B'
+                      WHEN percentage >= 50 THEN 'C+'
+                      WHEN percentage >= 40 THEN 'C'
+                      WHEN percentage >= 33 THEN 'D'
+                      ELSE 'F'
+                   END as grade,
+                   ROW_NUMBER() OVER (ORDER BY percentage DESC) as rank
+            FROM summary_data
+            ORDER BY published_at DESC`,
             [userId]
         );
 

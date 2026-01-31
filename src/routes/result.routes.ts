@@ -10,6 +10,7 @@ router.use(authenticate);
 router.get('/sessions', managementAccess, resultController.getAllResultSessions);
 router.post('/sessions', managementAccess, resultController.createResultSession);
 router.get('/sessions/:sessionId/students', managementAccess, resultController.getStudentsForMarkEntry);
+router.get('/sessions/:sessionId/subjects', managementAccess, resultController.getSubjectsForExamSession);
 router.get('/classes/:classId/subjects', managementAccess, resultController.getSubjectsForClass);
 router.post('/sessions/:sessionId/students/:studentId/marks', managementAccess, resultController.enterStudentMarks);
 router.get('/sessions/:sessionId/students/:studentId/marks', managementAccess, resultController.getStudentMarks);
