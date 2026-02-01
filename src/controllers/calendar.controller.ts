@@ -84,12 +84,93 @@ export const createHoliday = async (req: Request, res: Response): Promise<void> 
             return hRes.rows[0];
         });
 
+        // Trigger Push Notification asynchronously
+        if (schoolId) {
+            sendHolidayNotification(schoolId, title).catch(err => console.error('Background notification error:', err));
+        }
+
         successResponse(res, 'Holiday created successfully', result, 201);
     } catch (error) {
         console.error('Create holiday error:', error);
         errorResponse(res, 'Failed to create holiday', 500);
     }
 };
+
+// Helper to send holiday notification to all users
+async function sendHolidayNotification(schoolId: string, title: string) {
+    try {
+        const { query } = require('../config/database');
+        const { Expo } = require('expo-server-sdk');
+        const { expo } = require('../config/expo');
+
+        const userResult = await query(
+            `SELECT fcm_token FROM users WHERE school_id = $1 AND fcm_token IS NOT NULL AND fcm_token != ''`,
+            [schoolId]
+        );
+
+        const pushTokens = userResult.rows.map((row: any) => row.fcm_token);
+        const validTokens = pushTokens.filter((token: string) => Expo.isExpoPushToken(token));
+
+        if (validTokens.length === 0) return;
+
+        const messages = [];
+        for (let token of validTokens) {
+            messages.push({
+                to: token,
+                sound: 'default',
+                title: `🎉 छुट्टी की घोषणा / Holiday: ${title}`,
+                body: `विद्यालय में ${title} की छुट्टी घोषित की गई है। / Holiday declared for ${title}.`,
+                data: { type: 'holiday' },
+            });
+        }
+
+        const chunks = expo.chunkPushNotifications(messages);
+        for (let chunk of chunks) {
+            await expo.sendPushNotificationsAsync(chunk).catch((e: any) => console.error('Chunk send error:', e));
+        }
+        console.log(`🔔 Sent holiday notification to ${validTokens.length} devices.`);
+    } catch (error) {
+        console.error('Failed to send holiday push notification:', error);
+    }
+}
+
+// Helper to send event notification
+async function sendEventNotification(schoolId: string, title: string) {
+    try {
+        const { query } = require('../config/database');
+        const { Expo } = require('expo-server-sdk');
+        const { expo } = require('../config/expo');
+
+        const userResult = await query(
+            `SELECT fcm_token FROM users WHERE school_id = $1 AND fcm_token IS NOT NULL AND fcm_token != ''`,
+            [schoolId]
+        );
+
+        const pushTokens = userResult.rows.map((row: any) => row.fcm_token);
+        const validTokens = pushTokens.filter((token: string) => Expo.isExpoPushToken(token));
+
+        if (validTokens.length === 0) return;
+
+        const messages = [];
+        for (let token of validTokens) {
+            messages.push({
+                to: token,
+                sound: 'default',
+                title: `📅 नया कार्यक्रम / New Event: ${title}`,
+                body: `विद्यालय में एक नया कार्यक्रम आयोजित किया जा रहा है: ${title} / New event organized: ${title}`,
+                data: { type: 'event' },
+            });
+        }
+
+        const chunks = expo.chunkPushNotifications(messages);
+        for (let chunk of chunks) {
+            await expo.sendPushNotificationsAsync(chunk).catch((e: any) => console.error('Chunk send error:', e));
+        }
+        console.log(`🔔 Sent event notification to ${validTokens.length} devices.`);
+    } catch (error) {
+        console.error('Failed to send event push notification:', error);
+    }
+}
 
 // Delete holiday
 export const deleteHoliday = async (req: Request, res: Response): Promise<void> => {
@@ -149,6 +230,11 @@ export const createEvent = async (req: Request, res: Response): Promise<void> =>
              RETURNING *`,
             [schoolId, title, eventType, startDatetime, endDatetime || startDatetime, location, description, forClasses ? JSON.stringify(forClasses) : null, userId]
         );
+
+        // Trigger Push Notification asynchronously
+        if (schoolId) {
+            sendEventNotification(schoolId, title).catch(err => console.error('Background event notification error:', err));
+        }
 
         successResponse(res, 'Event created successfully', result.rows[0], 201);
     } catch (error) {
