@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
 import { query } from '../config/database';
 import { successResponse, errorResponse } from '../utils/response';
-import { messaging } from '../config/firebase';
+import { Expo } from 'expo-server-sdk';
+import { expo } from '../config/expo';
 
 /**
  * Get notifications for the current user
@@ -48,13 +49,17 @@ export const getMyNotifications = async (req: Request, res: Response): Promise<v
  */
 export const getUsersWithFcmToken = async (req: Request, res: Response): Promise<void> => {
     try {
+        // For testing: filter by specific user ID
+        const userId = "4e689e5c-dcbb-4ccb-8e0e-cf0a7c460ecb";
+
         const result = await query(
             `SELECT u.id, u.email, u.phone, u.role, u.fcm_token,
                     up.first_name, up.last_name, up.photo_url
              FROM users u
              LEFT JOIN user_profiles up ON u.id = up.user_id
-             WHERE u.fcm_token IS NOT NULL AND u.fcm_token != ''
-             ORDER BY u.role, up.first_name`
+             WHERE u.id = $1 AND u.fcm_token IS NOT NULL AND u.fcm_token != ''
+             ORDER BY u.role, up.first_name`,
+            [userId]
         );
 
         successResponse(res, 'Users with FCM tokens fetched', result.rows);
@@ -82,32 +87,80 @@ export const sendTestNotification = async (req: Request, res: Response): Promise
             [userId]
         );
 
-        const fcmToken = userResult.rows[0]?.fcm_token;
+        const pushToken = userResult.rows[0]?.fcm_token;
 
-        if (!fcmToken) {
-            errorResponse(res, 'User does not have an FCM token', 400);
+        if (!pushToken) {
+            errorResponse(res, 'User does not have a push token', 400);
             return;
         }
 
-        const messagePayload = {
-            notification: {
-                title,
-                body: message,
-            },
-            data: {
-                type: 'test',
-                sentAt: new Date().toISOString(),
-            },
-            token: fcmToken,
-        };
+        // Check if token is valid Expo push token
+        if (!Expo.isExpoPushToken(pushToken)) {
+            console.error(`Push token ${pushToken} is not a valid Expo push token`);
+            errorResponse(res, `Push token is not a valid Expo push token`, 400);
+            return;
+        }
 
-        const response = await messaging.send(messagePayload);
-        console.log('Test notification sent:', response);
+        // Construct message
+        const messages = [{
+            to: pushToken,
+            sound: 'default',
+            title: title,
+            body: message,
+            data: { type: 'test', sentAt: new Date().toISOString() },
+        }];
 
-        successResponse(res, 'Test notification sent successfully', { messageId: response });
+        // Send notifications
+        // Expo allows sending in batches (chunks)
+        const chunks = expo.chunkPushNotifications(messages);
+        const tickets = [];
+
+        for (const chunk of chunks) {
+            try {
+                const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+                tickets.push(...ticketChunk);
+            } catch (error) {
+                console.error('Error sending chunk:', error);
+            }
+        }
+
+        console.log('Push tickets:', tickets);
+
+        // Check for errors in tickets
+        const errors = tickets.filter(ticket => ticket.status === 'error');
+        if (errors.length > 0) {
+            console.error('Errors in push tickets:', errors);
+        }
+
+        successResponse(res, 'Test notification sent successfully', { tickets });
+        // ... existing code ...
     } catch (error: any) {
         console.error('Send test notification error:', error);
         errorResponse(res, error.message || 'Failed to send notification', 500);
+    }
+};
+
+/**
+ * Remove FCM token for a user
+ */
+export const removeFcmToken = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { userId } = req.body;
+
+        if (!userId) {
+            errorResponse(res, 'userId is required', 400);
+            return;
+        }
+
+        await query(
+            `UPDATE users SET fcm_token = NULL WHERE id = $1`,
+            [userId]
+        );
+
+        successResponse(res, 'FCM token removed successfully');
+    } catch (error) {
+        console.error('Remove FCM token error:', error);
+        errorResponse(res, 'Failed to remove FCM token', 500);
     }
 };
 

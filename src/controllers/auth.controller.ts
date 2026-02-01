@@ -328,15 +328,19 @@ export const updateFcmToken = [
             const { fcmToken } = req.body;
 
             if (!fcmToken) {
+                console.warn('Update FCM: Missing token for user', userId);
                 errorResponse(res, 'FCM token is required', 400);
                 return;
             }
+
+            console.log('Update FCM: Updating token for user:', userId);
 
             await query(
                 'UPDATE users SET fcm_token = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
                 [fcmToken, userId]
             );
 
+            console.log('Update FCM: Success for user:', userId);
             successResponse(res, 'FCM token updated successfully');
         } catch (error) {
             console.error('Update FCM token error:', error);
@@ -351,6 +355,7 @@ export const checkFcmToken = [
     async (req: Request, res: Response): Promise<void> => {
         try {
             const userId = req.user?.userId;
+            console.log(userId);
 
             const result = await query(
                 'SELECT fcm_token FROM users WHERE id = $1',
@@ -359,7 +364,7 @@ export const checkFcmToken = [
 
             const hasToken = !!(result.rows[0]?.fcm_token);
 
-            successResponse(res, 'FCM token status', { hasToken, token: result.rows[0]?.fcm_token });
+            successResponse(res, 'FCM token status', { hasToken, id: userId });
         } catch (error) {
             console.error('Check FCM token error:', error);
             errorResponse(res, 'Failed to check FCM token', 500);
