@@ -359,7 +359,7 @@ export const checkFcmToken = [
 
             const hasToken = !!(result.rows[0]?.fcm_token);
 
-            successResponse(res, 'FCM token status', { hasToken });
+            successResponse(res, 'FCM token status', { hasToken, token: result.rows[0]?.fcm_token });
         } catch (error) {
             console.error('Check FCM token error:', error);
             errorResponse(res, 'Failed to check FCM token', 500);

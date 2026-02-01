@@ -48,16 +48,13 @@ export const getMyNotifications = async (req: Request, res: Response): Promise<v
  */
 export const getUsersWithFcmToken = async (req: Request, res: Response): Promise<void> => {
     try {
-        const schoolId = req.user?.schoolId;
-
         const result = await query(
             `SELECT u.id, u.email, u.phone, u.role, u.fcm_token,
                     up.first_name, up.last_name, up.photo_url
              FROM users u
              LEFT JOIN user_profiles up ON u.id = up.user_id
-             WHERE u.school_id = $1 AND u.fcm_token IS NOT NULL AND u.fcm_token != ''
-             ORDER BY u.role, up.first_name`,
-            [schoolId]
+             WHERE u.fcm_token IS NOT NULL AND u.fcm_token != ''
+             ORDER BY u.role, up.first_name`
         );
 
         successResponse(res, 'Users with FCM tokens fetched', result.rows);
