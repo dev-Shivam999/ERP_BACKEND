@@ -175,6 +175,25 @@ WHERE s.status = 'active';
 `;
 
 // ============================================
+// STUDENT PARENTS & FCM VIEW
+// ============================================
+export const vwStudentPrimaryParents = () => `
+CREATE OR REPLACE VIEW vw_student_primary_parents AS
+SELECT 
+    s.id as student_id,
+    s.current_class_id,
+    s.status as student_status,
+    u.school_id, 
+    p.user_id as parent_user_id, 
+    pu.fcm_token
+FROM students s
+JOIN users u ON s.user_id = u.id
+JOIN student_parents sp ON s.id = sp.student_id AND sp.is_primary_contact = true
+JOIN parents p ON sp.parent_id = p.id
+LEFT JOIN users pu ON p.user_id = pu.id;
+`;
+
+// ============================================
 // ALL VIEWS EXPORT
 // ============================================
 export const allViews = [
@@ -183,4 +202,5 @@ export const allViews = [
   { name: 'vw_fee_defaulters', sql: vwFeeDefaulters },
   { name: 'vw_fee_collection_daily', sql: vwFeeCollectionDaily },
   { name: 'vw_student_dashboard', sql: vwStudentDashboard },
+  { name: 'vw_student_primary_parents', sql: vwStudentPrimaryParents },
 ];

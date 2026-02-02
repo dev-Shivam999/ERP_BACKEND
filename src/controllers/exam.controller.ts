@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { query, transaction } from '../config';
 import { successResponse, errorResponse } from '../utils';
 import { sendStudentNotification } from '../utils/notification.utils';
+import { processResultNotifications } from '../utils/exam.notification';
 
 // Get all exams
 export const getAllExams = async (req: Request, res: Response): Promise<void> => {
@@ -105,36 +106,8 @@ export const createExam = async (req: Request, res: Response): Promise<void> => 
                 }
 
                 // Send notification to ACTIVE students of these classes
-                const activeStudents = await client.query(
-                    `SELECT id, user_id FROM students WHERE current_class_id = ANY($1) AND status = 'active'`,
-                    [selectedClasses]
-                );
-
-                for (const student of activeStudents.rows) {
-                    await sendStudentNotification(
-                        student.id,
-                        `New Exam: ${name}`,
-                        `Examination schedule for ${name} has been published. Exams start from ${startDate}.`,
-                        'general',
-                        'high',
-                        req.user?.userId || '',
-                        schoolId || '',
-                        client
-                    );
-                }
+               
             }
-
-            // Send notification to all teachers
-            await client.query(
-                `INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, created_by)
-                 VALUES ($1, $2, $3, 'general', 'normal', 'role', $4)`,
-                [
-                    schoolId,
-                    `Exam Timetable: ${name}`,
-                    `A new exam schedule for ${name} has been created. Please review the invigilation duties.`,
-                    req.user?.userId
-                ]
-            );
 
             return exam;
         });
@@ -411,36 +384,25 @@ export const publishResults = async (req: Request, res: Response): Promise<void>
         const schoolId = req.user?.schoolId;
         const { examId } = req.params;
 
-        await transaction(async (client) => {
-            // Mark exam as published
-            const examRes = await client.query(
-                `UPDATE exams SET is_published = true WHERE id = $1 RETURNING name`,
-                [examId]
-            );
-            const examName = examRes.rows[0].name;
+        // Mark exam as published
+        const examRes = await query(
+            `UPDATE exams SET is_published = true WHERE id = $1 RETURNING name`,
+            [examId]
+        );
 
-            // Get target classes for this exam
-            const classesRes = await client.query(
-                `SELECT DISTINCT class_id FROM exam_schedules WHERE exam_id = $1`,
-                [examId]
-            );
-            const classIds = classesRes.rows.map(r => r.class_id);
+        if (examRes.rows.length === 0) {
+            errorResponse(res, 'Exam not found', 404);
+            return;
+        }
 
-            // Send notification to students/parents of these classes
-            await client.query(
-                `INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, target_ids, created_by)
-                 VALUES ($1, $2, $3, 'result', 'high', 'class', $4, $5)`,
-                [
-                    schoolId,
-                    'Exam Results Published',
-                    `The results for ${examName} have been published. You can now view and download the marksheet from the app.`,
-                    JSON.stringify(classIds),
-                    userId
-                ]
-            );
-        });
+        const examName = examRes.rows[0].name;
 
-        successResponse(res, 'Results published and notifications broadcasted');
+        // Send notifications in background
+        processResultNotifications(String(examId), examName, String(userId), String(schoolId)).catch(err => 
+            console.error('Background result notification error:', err)
+        );
+
+        successResponse(res, 'Results published successfully');
     } catch (error) {
         console.error('Publish results error:', error);
         errorResponse(res, 'Failed to publish results', 500);

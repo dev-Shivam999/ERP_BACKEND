@@ -1,12 +1,20 @@
 import { Request, Response } from 'express';
 import { query } from '../config';
 import { successResponse, errorResponse } from '../utils';
+import { sendNotificationToUser } from '../utils/notification.utils';
+import { messaging } from '../config/firebase';
+import { processAbsentNotifications } from '../utils/attendance.notification';
 
 // Mark attendance for a class
 export const markAttendance = async (req: Request, res: Response): Promise<void> => {
     try {
         const userId = req.user?.userId;
         const { classId, sectionId, date, attendance } = req.body;
+
+        if (!userId) {
+            errorResponse(res, 'User not authenticated', 401);
+            return;
+        }
 
         if (!classId || !sectionId || !date || !attendance || !Array.isArray(attendance)) {
             errorResponse(res, 'Invalid attendance data', 400);
@@ -25,28 +33,12 @@ export const markAttendance = async (req: Request, res: Response): Promise<void>
             [classId, sectionId, date, JSON.stringify(attendanceMap), userId]
         );
 
-        // Send notifications for absent students (in-app)
+        // Send notifications for absent students (asynchronously)
         const absentStudents = attendance.filter((a: any) => a.status === 'absent');
-
         if (absentStudents.length > 0) {
-            // Create notifications for absent students' parents
-            for (const absent of absentStudents) {
-                await query(
-                    `INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, target_ids, created_by)
-           SELECT u.school_id, 
-                  'बच्चा आज Absent है / Child Absent Today',
-                  'आपका बच्चा आज (' || $2 || ') स्कूल में अनुपस्थित है। Your child is absent from school today.',
-                  'attendance', 'high', 'individual',
-                  jsonb_build_array(p.user_id),
-                  $3
-           FROM students s
-           JOIN users u ON s.user_id = u.id
-           JOIN student_parents sp ON s.id = sp.student_id AND sp.is_primary_contact = true
-           JOIN parents p ON sp.parent_id = p.id
-           WHERE s.id = $1`,
-                    [absent.student_id, date, userId]
-                );
-            }
+            processAbsentNotifications(absentStudents, date, userId).catch((err: any) =>
+                console.error('Background notification process error:', err)
+            );
         }
 
         successResponse(res, 'Attendance marked successfully', result.rows[0]);
@@ -433,3 +425,8 @@ export const getLowAttendanceStudents = async (req: Request, res: Response): Pro
         errorResponse(res, 'Failed to fetch data', 500);
     }
 };
+
+/**
+ * Background process to handle bulk absent notifications
+ */
+

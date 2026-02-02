@@ -90,3 +90,75 @@ export const sendStudentNotification = async (
         return false;
     }
 };
+
+/**
+ * Sends a notification to a specific user (parent, teacher, etc.)
+ * 
+ * @param userId The User ID (UUID) of the recipient
+ * @param schoolId School ID
+ * @param title Notification title
+ * @param message Notification message
+ * @param type Notification type
+ * @param priority Priority
+ * @param createdBy User ID of the creator
+ * @param client Optional database client
+ * @returns true if sent successfully (persisted to DB)
+ */
+export const sendNotificationToUser = async (
+    userId: string,
+    schoolId: string,
+    title: string,
+    message: string,
+    type: string,
+    priority: string,
+    createdBy: string,
+    client?: PoolClient
+): Promise<boolean> => {
+    try {
+        const dbQuery = client ? client.query.bind(client) : query;
+
+        // Insert notification
+        await dbQuery(
+            `INSERT INTO notifications (school_id, title, message, notification_type, priority, target_type, target_ids, created_by)
+             VALUES ($1, $2, $3, $4, $5, 'individual', jsonb_build_array($6::uuid), $7)`,
+            [schoolId, title, message, type, priority, userId, createdBy]
+        );
+
+        // Send FCM Push Notification
+        try {
+            // Fetch user's FCM Token
+            const userResult = await dbQuery(
+                `SELECT fcm_token FROM users WHERE id = $1`,
+                [userId]
+            );
+
+            const fcmToken = userResult.rows[0]?.fcm_token;
+
+            if (fcmToken) {
+                const messagePayload = {
+                    notification: {
+                        title: title,
+                        body: message,
+                    },
+                    data: {
+                        type,
+                        userId,
+                    },
+                    token: fcmToken,
+                };
+
+                await messaging.send(messagePayload);
+                console.log(`Successfully sent FCM notification to user ${userId}`);
+            }
+        } catch (pushError) {
+            console.error('Failed to send FCM notification:', pushError);
+            // Don't fail the whole operation if push fails
+        }
+
+        return true;
+    } catch (error) {
+        console.error(`Error sending notification to user ${userId}:`, error);
+        return false;
+    }
+};
+

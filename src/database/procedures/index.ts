@@ -261,6 +261,46 @@ $$ LANGUAGE plpgsql;
 `;
 
 // ============================================
+// BULK INSERT NOTIFICATIONS
+// ============================================
+export const spBulkInsertNotifications = () => `
+CREATE OR REPLACE PROCEDURE sp_bulk_insert_notifications(
+    p_title TEXT,
+    p_message TEXT,
+    p_type TEXT,
+    p_priority TEXT,
+    p_created_by UUID,
+    p_school_ids UUID[],
+    p_target_user_ids UUID[]
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    INSERT INTO notifications (
+        school_id, 
+        target_ids, 
+        title, 
+        message, 
+        notification_type, 
+        priority, 
+        target_type, 
+        created_by
+    )
+    SELECT 
+        s_id, 
+        jsonb_build_array(t_id), 
+        p_title, 
+        p_message, 
+        p_type, 
+        p_priority, 
+        'individual', 
+        p_created_by
+    FROM unnest(p_school_ids, p_target_user_ids) AS t(s_id, t_id);
+END;
+$$;
+`;
+
+// ============================================
 // ALL PROCEDURES EXPORT
 // ============================================
 export const allProcedures = [
@@ -270,4 +310,5 @@ export const allProcedures = [
   { name: 'sp_mark_class_attendance', sql: spMarkClassAttendance },
   { name: 'sp_calculate_monthly_salary', sql: spCalculateMonthlySalary },
   { name: 'sp_promote_students', sql: spPromoteStudents },
+  { name: 'sp_bulk_insert_notifications', sql: spBulkInsertNotifications },
 ];
