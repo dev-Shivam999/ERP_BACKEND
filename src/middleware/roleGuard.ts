@@ -65,6 +65,8 @@ export const hasPermission = (permission: string) => {
         }
 
         // Check for specific permission
+        console.log(req.user.permissions);
+        
         if (req.user.permissions?.[permission]) {
             next();
             return;
