@@ -835,6 +835,9 @@ CREATE INDEX idx_certificate_requests_status ON certificate_requests(status);
 // ============================================
 // 19. CALENDAR (HOLIDAYS & EVENTS)
 // ============================================
+// ============================================
+// 19. CALENDAR (HOLIDAYS & EVENTS)
+// ============================================
 export const calendar = () => `
 CREATE TABLE IF NOT EXISTS holidays (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -868,6 +871,18 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX idx_holidays_school ON holidays(school_id);
 CREATE INDEX idx_holidays_academic_year ON holidays(academic_year_id);
 CREATE INDEX idx_events_school ON events(school_id);
+`;
+
+// ============================================
+// 20. DASHBOARD OPTIMIZATION INDEXES
+// ============================================
+export const addDashboardIndexes = () => `
+    CREATE INDEX IF NOT EXISTS idx_fee_payments_date ON fee_payments(payment_date);
+    CREATE INDEX IF NOT EXISTS idx_fee_structures_class ON fee_structures(class_id);
+    CREATE INDEX IF NOT EXISTS idx_students_user ON students(user_id);
+    CREATE INDEX IF NOT EXISTS idx_users_school_role ON users(school_id, role);
+    CREATE INDEX IF NOT EXISTS idx_student_fees_student ON student_fees(student_id);
+    CREATE INDEX IF NOT EXISTS idx_academic_years_current ON academic_years(school_id, is_current) WHERE is_current = true;
 `;
 
 // ============================================
@@ -911,4 +926,5 @@ export const allTables = [
   { name: '17_admit_cards', sql: admitCards },
   { name: '18_certificate_requests', sql: certificateRequests },
   { name: '19_calendar', sql: calendar },
+  { name: '20_dashboard_indexes', sql: addDashboardIndexes },
 ];

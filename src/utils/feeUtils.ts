@@ -239,48 +239,86 @@ export async function getSchoolFeeSummary(schoolId: string | number): Promise<{
 }> {
     const today = new Date().toISOString().split('T')[0];
 
-    const result = await query(
-        `SELECT 
-            (SELECT COALESCE(SUM(fp.amount_paid), 0) FROM fee_payments fp 
-             JOIN student_fees sf ON fp.student_fee_id = sf.id 
-             JOIN students s ON sf.student_id = s.id 
-             JOIN users u ON s.user_id = u.id 
-             WHERE u.school_id = $1 AND fp.payment_date = $2) as today_collection,
-            
-            (SELECT COALESCE(SUM(fp.amount_paid), 0) FROM fee_payments fp 
-             JOIN student_fees sf ON fp.student_fee_id = sf.id 
-             JOIN students s ON sf.student_id = s.id 
-             JOIN users u ON s.user_id = u.id 
-             WHERE u.school_id = $1) as yearly_collection,
-            
-            (SELECT COALESCE(SUM(
-                GREATEST(
-                    COALESCE(
-                        (SELECT SUM(fs.amount) FROM fee_structures fs WHERE fs.class_id = s.current_class_id),
-                        c.monthly_fee_amount,
-                        0
-                    )
-                    - COALESCE((SELECT SUM(sf.amount_paid) FROM student_fees sf WHERE sf.student_id = s.id), 0),
-                    0
-                )
-            ), 0)
-            FROM students s
-            JOIN classes c ON s.current_class_id = c.id
-            JOIN users u ON s.user_id = u.id
-            WHERE u.school_id = $1 AND s.status = 'active') as total_pending,
-            
-            (SELECT COUNT(*) FROM students s
-             JOIN users u ON s.user_id = u.id
-             WHERE u.school_id = $1 AND s.status = 'active') as total_students`,
-        [schoolId, today]
-    );
+    // 1. Get collections (Today and Yearly)
+    // Use CURRENT_DATE from DB to ensure local timezone of server is respected if configured, 
+    // or at least consistent day.
+    const collectionsQuery = `
+        SELECT 
+            COALESCE(SUM(CASE WHEN payment_date = CURRENT_DATE THEN fp.amount_paid ELSE 0 END), 0) as today_collection,
+            COALESCE(SUM(fp.amount_paid), 0) as yearly_collection
+        FROM fee_payments fp
+        JOIN student_fees sf ON fp.student_fee_id = sf.id
+        JOIN students s ON sf.student_id = s.id
+        JOIN users u ON s.user_id = u.id
+        WHERE u.school_id = $1
+    `;
 
-    const row = result.rows[0];
+    // 2. Total Students (Simple, robust query)
+    const studentsQuery = `
+        SELECT COUNT(*) as total_students
+        FROM students s
+        JOIN users u ON s.user_id = u.id
+        WHERE u.school_id = $1 AND s.status = 'active'
+    `;
+
+    // 3. Financials (Expected vs Paid)
+    const feesQuery = `
+        WITH class_structures AS (
+            SELECT class_id, COALESCE(SUM(amount), 0) as class_total
+            FROM fee_structures fs
+            JOIN academic_years ay ON fs.academic_year_id = ay.id
+            WHERE ay.is_current = true
+            GROUP BY class_id
+        ),
+        class_counts AS (
+            SELECT current_class_id as class_id, COUNT(*) as student_count
+            FROM students s
+            JOIN users u ON s.user_id = u.id
+            WHERE u.school_id = $1 AND s.status = 'active'
+            GROUP BY current_class_id
+        ),
+        total_paid AS (
+            SELECT COALESCE(SUM(amount_paid), 0) as paid
+            FROM student_fees sf
+            JOIN students s ON sf.student_id = s.id
+            JOIN users u ON s.user_id = u.id
+            WHERE u.school_id = $1 AND s.status = 'active'
+        )
+        SELECT 
+            (SELECT COALESCE(SUM(cs.class_total * cc.student_count), 0) 
+             FROM class_structures cs 
+             JOIN class_counts cc ON cs.class_id = cc.class_id) as total_expected,
+            (SELECT paid FROM total_paid) as total_paid
+    `;
+
+    const [collectionsResult, studentsResult, feesResult] = await Promise.all([
+        query(collectionsQuery, [schoolId]),
+        query(studentsQuery, [schoolId]),
+        query(feesQuery, [schoolId])
+    ]);
+
+    const collections = collectionsResult.rows[0];
+    const studentsCount = studentsResult.rows[0];
+    const fees = feesResult.rows[0];
+
+    const totalStudents = parseInt(studentsCount.total_students || '0');
+    const totalExpected = parseFloat(fees.total_expected || '0');
+    const totalPaid = parseFloat(fees.total_paid || '0');
+    const totalPending = Math.max(0, totalExpected - totalPaid);
+
+    console.log('Dashboard Debug:', {
+        schoolId,
+        totalStudents,
+        totalExpected,
+        totalPaid,
+        todayCollection: collections.today_collection
+    });
+
     return {
-        todayCollection: parseFloat(row.today_collection || '0'),
-        yearlyCollection: parseFloat(row.yearly_collection || '0'),
-        totalPending: parseFloat(row.total_pending || '0'),
-        totalStudents: parseInt(row.total_students || '0'),
+        todayCollection: parseFloat(collections.today_collection || '0'),
+        yearlyCollection: parseFloat(collections.yearly_collection || '0'),
+        totalPending: totalPending,
+        totalStudents: totalStudents,
     };
 }
 
