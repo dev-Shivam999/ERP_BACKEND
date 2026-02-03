@@ -88,6 +88,8 @@ export const sendTestNotification = async (req: Request, res: Response): Promise
         );
 
         const pushToken = userResult.rows[0]?.fcm_token;
+        console.log(pushToken);
+        
 
         if (!pushToken) {
             errorResponse(res, 'User does not have a push token', 400);

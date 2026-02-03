@@ -1,5 +1,6 @@
 import { query } from "../config";
-import { messaging } from "../config/firebase";
+import { expo } from "../config/expo";
+import { Expo } from "expo-server-sdk";
 
 export const processAbsentNotifications = async (absentStudents: any[], date: string, userId: string) => {
     try {
@@ -30,25 +31,45 @@ export const processAbsentNotifications = async (absentStudents: any[], date: st
         );
 
         // 3. Send FCM in parallel
-        const fcmPromises = parentsResult.rows
-            .filter(row => row.fcm_token)
-            .map(async (row) => {
-                try {
-                    const messagePayload = {
-                        notification: { title, body: message },
-                        data: { type: 'attendance', userId: row.parent_user_id },
-                        token: row.fcm_token,
-                    };
-                    await messaging.send(messagePayload);
-                } catch (e) {
-                    console.error(`FCM failed for ${row.parent_user_id}:`, e);
-                }
-            });
+        // 3. Prepare Expo messages 
+        const messages: any[] = [];
+        for (const row of parentsResult.rows) {
+            if (!Expo.isExpoPushToken(row.fcm_token)) {
+                console.error(`Push token ${row.fcm_token} is not a valid Expo push token`);
+                continue;
+            }
 
-        if (fcmPromises.length > 0) {
-            await Promise.all(fcmPromises);
-            console.log(`Sent ${fcmPromises.length} FCM notifications`);
+            messages.push({
+                to: row.fcm_token,
+                sound: 'default',
+                title: title,
+                body: message,
+                data: { type: 'attendance', userId: row.parent_user_id },
+            });
         }
+
+        // 4. Send chunks
+        const chunks = expo.chunkPushNotifications(messages);
+        const tickets = [];
+
+        for (const chunk of chunks) {
+            try {
+                const ticketChunk = await expo.sendPushNotificationsAsync(chunk);
+                tickets.push(...ticketChunk);
+            } catch (error) {
+                console.error('Error sending chunk:', error);
+            }
+        }
+
+        // 5. Check for errors
+        const errors = tickets.filter(ticket => ticket.status === 'error');
+        if (errors.length > 0) {
+            console.error('Errors in push tickets:', errors);
+        }
+
+        console.log(`Sent ${tickets.length} notifications`);
+
+
 
         console.log('Finished background notification processing');
     } catch (error) {

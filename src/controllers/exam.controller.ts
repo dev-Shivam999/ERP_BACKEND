@@ -10,7 +10,30 @@ export const getAllExams = async (req: Request, res: Response): Promise<void> =>
         const schoolId = req.user?.schoolId;
 
         const result = await query(
-            `SELECT e.*, ay.name as academic_year
+            `SELECT 
+                e.*, 
+                ay.name as academic_year,
+                (
+                    SELECT json_agg(
+                        json_build_object(
+                            'subject_name', s.name,
+                            'exam_date', es.exam_date,
+                            'start_time', es.start_time,
+                            'end_time', es.end_time,
+                             'class_name', c.name
+                        ) ORDER BY es.exam_date, es.start_time
+                    )
+                    FROM exam_schedules es
+                    JOIN subjects s ON es.subject_id = s.id
+                    JOIN classes c ON es.class_id = c.id
+                    WHERE es.exam_id = e.id
+                ) as schedule,
+                (
+                    SELECT json_build_object(
+                        'total_students', (SELECT COUNT(*) FROM students st WHERE st.current_class_id IN (SELECT class_id FROM exam_schedules WHERE exam_id = e.id) AND st.status = 'active'),
+                        'students_with_marks', (SELECT COUNT(DISTINCT em.student_id) FROM exam_marks em JOIN exam_schedules es ON em.exam_schedule_id = es.id WHERE es.exam_id = e.id)
+                    )
+                ) as stats
              FROM exams e
              LEFT JOIN academic_years ay ON e.academic_year_id = ay.id
              WHERE e.school_id = $1
@@ -106,7 +129,7 @@ export const createExam = async (req: Request, res: Response): Promise<void> => 
                 }
 
                 // Send notification to ACTIVE students of these classes
-               
+
             }
 
             return exam;
@@ -398,7 +421,7 @@ export const publishResults = async (req: Request, res: Response): Promise<void>
         const examName = examRes.rows[0].name;
 
         // Send notifications in background
-        processResultNotifications(String(examId), examName, String(userId), String(schoolId)).catch(err => 
+        processResultNotifications(String(examId), examName, String(userId), String(schoolId)).catch(err =>
             console.error('Background result notification error:', err)
         );
 

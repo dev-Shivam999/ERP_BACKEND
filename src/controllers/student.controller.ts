@@ -40,9 +40,16 @@ export const getAllStudents = async (req: Request, res: Response): Promise<void>
             paramIndex++;
         }
 
-        // Get total count
-        const countResult = await query(
-            `SELECT COUNT(*) FROM students s
+        // Clone params for count query (without pagination)
+        const countParams = [...params];
+
+        // Add pagination params for data query
+        const dataParams = [...params, pageLimit, offset];
+
+        // Execute both queries concurrently
+        const [countResult, result] = await Promise.allSettled([
+            query(
+                `SELECT COUNT(*) FROM students s
        JOIN users u ON s.user_id = u.id
        JOIN user_profiles up ON u.id = up.user_id
        LEFT JOIN student_parents sp ON s.id = sp.student_id AND sp.relationship = 'father'
@@ -50,15 +57,10 @@ export const getAllStudents = async (req: Request, res: Response): Promise<void>
        LEFT JOIN users pu ON p.user_id = pu.id
        LEFT JOIN user_profiles pup ON pu.id = pup.user_id
        ${whereClause}`,
-            params
-        );
-
-        const total = parseInt(countResult.rows[0].count);
-
-        // Get students
-        params.push(pageLimit, offset);
-        const result = await query(
-            `SELECT s.id, s.user_id as user_id, s.admission_number, s.roll_number, s.category, s.status,
+                countParams
+            ),
+            query(
+                `SELECT s.id, s.user_id as user_id, s.admission_number, s.roll_number, s.category, s.status,
               s.is_govt_scholarship, s.scholarship_type, s.stream,
               s.previous_school, s.transport_required, s.hostel_required,
               up.first_name, up.last_name, up.photo_url, up.gender, up.date_of_birth,
@@ -83,18 +85,25 @@ export const getAllStudents = async (req: Request, res: Response): Promise<void>
        ${whereClause}
        ORDER BY c.numeric_value, sec.name, s.roll_number
        LIMIT $${paramIndex++} OFFSET $${paramIndex}`,
-            params
-        );
+                dataParams
+            )
+        ]);
 
-        if (result.rows.length > 0) {
+        const total = countResult.status === 'fulfilled' ? parseInt(countResult.value.rows[0].count) : 0;
+        const rows = result.status === 'fulfilled' ? result.value.rows : [];
+
+        if (countResult.status === 'rejected') console.error('Count query failed:', countResult.reason);
+        if (result.status === 'rejected') console.error('Students query failed:', result.reason);
+
+        if (rows.length > 0) {
             console.log('DEBUG: First student fetched:', {
-                id: result.rows[0].id,
-                user_id: result.rows[0].user_id,
-                api_version: result.rows[0].api_version
+                id: rows[0].id,
+                user_id: rows[0].user_id,
+                api_version: rows[0].api_version
             });
         }
 
-        successResponse(res, 'Students fetched successfully', result.rows, 200, {
+        successResponse(res, 'Students fetched successfully', rows, 200, {
             page: Number(page),
             limit: pageLimit,
             total,

@@ -12,17 +12,17 @@ export const getStats = [
             const schoolId = req.user?.schoolId;
 
             // Total students count (via users table)
-            const studentsResult = await query(
-                `SELECT COUNT(*) as total 
-                 FROM students s
-                 JOIN users u ON s.user_id = u.id
-                 WHERE u.school_id = $1 AND s.status = 'active'`,
-                [schoolId]
-            );
+            // const studentsResult = await query(
+            //     `SELECT COUNT(*) as total 
+            //      FROM students s
+            //      JOIN users u ON s.user_id = u.id
+            //      WHERE u.school_id = $1 AND s.status = 'active'`,
+            //     [schoolId]
+            // );
 
             // Today's attendance
             const today = new Date().toISOString().split('T')[0];
-            const attendanceResult = await query(
+            const [attendanceResult, collectionResult, feeSummary, recentAdmissionsResult, weeklyAttendanceResult, categoryStatsResult, teachersResult, pendingCertificatesResult] = await Promise.allSettled([query(
                 `SELECT 
                     COUNT(CASE WHEN sa.status = 'present' THEN 1 END) as present,
                     COUNT(CASE WHEN sa.status = 'absent' THEN 1 END) as absent,
@@ -31,10 +31,10 @@ export const getStats = [
                  JOIN classes c ON sa.class_id = c.id
                  WHERE c.school_id = $1 AND sa.date = $2`,
                 [schoolId, today]
-            );
+            ),
 
             // Today's fee collection
-            const collectionResult = await query(
+            query(
                 `SELECT 
                     COALESCE(SUM(fp.amount_paid), 0) as total,
                     COALESCE(SUM(CASE WHEN fp.payment_mode = 'cash' THEN fp.amount_paid ELSE 0 END), 0) as cash,
@@ -47,28 +47,16 @@ export const getStats = [
                  JOIN users u ON s.user_id = u.id
                  WHERE u.school_id = $1 AND DATE(fp.payment_date) = $2`,
                 [schoolId, today]
-            );
-
-            // Total pending fees using centralized utility
-            const feeSummary = await getSchoolFeeSummary(schoolId as string);
+            ), 
+            getSchoolFeeSummary(schoolId as string),
 
             // Fee defaulters using centralized utility (students with pending > 0)
-            const allStudentsFees = await getAllStudentsFeeTotals(schoolId as string);
-            const feeDefaulters = allStudentsFees
-                .filter(s => s.totalPending > 0)
-                .slice(0, 5)
-                .map(s => ({
-                    id: s.studentId,
-                    admission_number: s.admissionNumber,
-                    first_name: s.studentName.split(' ')[0],
-                    last_name: s.studentName.split(' ').slice(1).join(' '),
-                    class_name: s.className,
-                    section_name: s.sectionName,
-                    due_amount: s.totalPending,
-                }));
+            // getAllStudentsFeeTotals(schoolId as string),
+
+
 
             // Recent admissions (last 5)
-            const recentAdmissionsResult = await query(
+            query(
                 `SELECT s.id, s.admission_number, 
                         up.first_name, up.last_name,
                         c.name as class_name, sec.name as section_name,
@@ -82,10 +70,9 @@ export const getStats = [
                  ORDER BY s.created_at DESC
                  LIMIT 5`,
                 [schoolId]
-            );
-
+            ),
             // Weekly attendance (last 7 days)
-            const weeklyAttendanceResult = await query(
+            query(
                 `SELECT 
                     sa.date,
                     COUNT(CASE WHEN sa.status = 'present' THEN 1 END) as present,
@@ -96,10 +83,10 @@ export const getStats = [
                  GROUP BY sa.date
                  ORDER BY sa.date ASC`,
                 [schoolId]
-            );
+            ),
 
             // Students by category
-            const categoryStatsResult = await query(
+            query(
                 `SELECT 
                     COALESCE(s.category::TEXT, 'unspecified') as category,
                     COUNT(*) as value
@@ -108,45 +95,57 @@ export const getStats = [
                  WHERE u.school_id = $1 AND s.status = 'active'
                  GROUP BY s.category`,
                 [schoolId]
-            );
+            ),
 
             // Teachers count
-            const teachersResult = await query(
+            query(
                 `SELECT COUNT(*) as total FROM users WHERE school_id = $1 AND role = 'teacher' AND is_active = true`,
                 [schoolId]
-            );
+            ),
 
             // Pending Certificate Requests
-            const pendingCertificatesResult = await query(
+            query(
                 `SELECT COUNT(*) as total FROM certificate_requests WHERE school_id = $1 AND status = 'pending'`,
                 [schoolId]
-            );
+            )]);
+            const feeDefaulters = attendanceResult.status=="fulfilled"?attendanceResult.value.rows
+                .filter(s => s.totalPending > 0)
+                .slice(0, 5)
+                .map(s => ({
+                    id: s.studentId,
+                    admission_number: s.admissionNumber,
+                    first_name: s.studentName.split(' ')[0],
+                    last_name: s.studentName.split(' ').slice(1).join(' '),
+                    class_name: s.className,
+                    section_name: s.sectionName,
+                    due_amount: s.totalPending,
+                })):[]
 
             const stats = {
-                totalStudents: feeSummary.totalStudents,
+                totalStudents: feeSummary.status=="fulfilled"?feeSummary.value.totalStudents:0,
                 attendance: {
-                    present: parseInt(attendanceResult.rows[0]?.present || '0'),
-                    absent: parseInt(attendanceResult.rows[0]?.absent || '0'),
-                    total: parseInt(attendanceResult.rows[0]?.total || '0'),
+                    present: parseInt(attendanceResult.status=="fulfilled"?attendanceResult.value.rows[0]?.present || '0':0),
+                    absent: parseInt(attendanceResult.status=="fulfilled"?attendanceResult.value.rows[0]?.absent || '0':0),
+                    total: parseInt(attendanceResult.status=="fulfilled"?attendanceResult.value.rows[0]?.total || '0':0),
                 },
                 todayCollection: {
-                    total: feeSummary.todayCollection,
-                    cash: parseFloat(collectionResult.rows[0]?.cash || '0'),
-                    online: parseFloat(collectionResult.rows[0]?.online || '0'),
-                    cheque: parseFloat(collectionResult.rows[0]?.cheque || '0'),
-                    transactions: parseInt(collectionResult.rows[0]?.transactions || '0'),
+                    total: feeSummary.status=="fulfilled"?feeSummary.value.todayCollection:0,
+                    cash: parseFloat(collectionResult.status=="fulfilled"?collectionResult.value.rows[0]?.cash || '0':0),
+                    online: parseFloat(collectionResult.status=="fulfilled"?collectionResult.value.rows[0]?.online || '0':0),
+                    cheque: parseFloat(collectionResult.status=="fulfilled"?collectionResult.value.rows[0]?.cheque || '0':0),
+                    transactions: parseInt(collectionResult.status=="fulfilled"?collectionResult.value.rows[0]?.transactions || '0':0),
                 },
-                pendingFees: feeSummary.totalPending,
-                yearlyCollection: feeSummary.yearlyCollection,
-                totalTeachers: parseInt(teachersResult.rows[0]?.total || '0'),
-                pendingCertificates: parseInt(pendingCertificatesResult.rows[0]?.total || '0'),
-                recentAdmissions: recentAdmissionsResult.rows.map((row: any) => ({
+                pendingFees: feeSummary.status=="fulfilled"?feeSummary.value.totalPending:0,
+                yearlyCollection: feeSummary.status=="fulfilled"?feeSummary.value.yearlyCollection:0,
+                totalTeachers: parseInt(teachersResult.status=="fulfilled"?teachersResult.value.rows[0]?.total || '0':0),
+                pendingCertificates: parseInt(pendingCertificatesResult.status=="fulfilled"?pendingCertificatesResult.value.rows[0]?.total || '0':0),
+                recentAdmissions: recentAdmissionsResult.status=="fulfilled"?recentAdmissionsResult.value.rows.map((row: any) => ({
                     id: row.id,
                     admissionNumber: row.admission_number,
                     name: `${row.first_name} ${row.last_name || ''}`.trim(),
                     class: `${row.class_name || ''} ${row.section_name || ''}`.trim(),
                     date: row.admission_date,
-                })),
+                })):[],
                 feeDefaulters: feeDefaulters.map((d: any) => ({
                     id: d.id,
                     admissionNumber: d.admission_number,
@@ -154,15 +153,15 @@ export const getStats = [
                     class: `${d.class_name || ''} ${d.section_name || ''}`.trim(),
                     dueAmount: d.due_amount,
                 })),
-                weeklyAttendance: weeklyAttendanceResult.rows.map((row: any) => ({
+                weeklyAttendance: weeklyAttendanceResult.status=="fulfilled"?weeklyAttendanceResult.value.rows.map((row: any) => ({
                     date: row.date,
                     day: new Date(row.date).toLocaleDateString('en-US', { weekday: 'short' }),
                     present: Math.round((parseInt(row.present) / parseInt(row.total)) * 100),
-                })),
-                categoryStats: categoryStatsResult.rows.map((row: any) => ({
+                })):[],
+                categoryStats: categoryStatsResult.status=="fulfilled"?categoryStatsResult.value.rows.map((row: any) => ({
                     name: row.category.charAt(0).toUpperCase() + row.category.slice(1),
                     value: parseInt(row.value),
-                })),
+                })):[],
             };
 
             successResponse(res, 'Dashboard stats fetched', stats);

@@ -291,8 +291,8 @@ BEGIN
         jsonb_build_array(t_id), 
         p_title, 
         p_message, 
-        p_type, 
-        p_priority, 
+        p_type::notification_type, 
+        p_priority::notification_priority, 
         'individual', 
         p_created_by
     FROM unnest(p_school_ids, p_target_user_ids) AS t(s_id, t_id);
