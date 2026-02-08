@@ -53,6 +53,24 @@ export const login = async (req: Request, res: Response): Promise<void> => {
             [user.id]
         );
 
+        // Handle Device Registration (Background)
+        const { deviceId, fcmToken } = req.body;
+        if (deviceId) {
+            (async () => {
+                try {
+                    await query(
+                        `INSERT INTO user_devices (user_id, device_id, fcm_token, last_active)
+                         VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                         ON CONFLICT (user_id, device_id) 
+                         DO UPDATE SET fcm_token = EXCLUDED.fcm_token, last_active = CURRENT_TIMESTAMP`,
+                        [user.id, deviceId, fcmToken || null]
+                    );
+                } catch (err) {
+                    console.error('Values background device registration failed:', err);
+                }
+            })();
+        }
+
         // Generate JWT token
         const payload: JwtPayload = {
             userId: user.id,
@@ -82,6 +100,36 @@ export const login = async (req: Request, res: Response): Promise<void> => {
     } catch (error) {
         console.error('Login error:', error);
         errorResponse(res, 'Login failed', 500);
+    }
+};
+
+// Logout user
+export const logout = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { deviceId } = req.body;
+        const userId = req.user?.userId; // Assuming authenticate middleware is used, but logout might be public if token is invalid. 
+        // If we want to secure it, we need the token. If it's just device cleanup, we might need userId.
+        // Let's assume authenticated for now to ensure we delete the right user's device.
+
+        if (userId && deviceId) {
+            // Background cleanup
+            (async () => {
+                try {
+                    await query(
+                        'DELETE FROM user_devices WHERE user_id = $1 AND device_id = $2',
+                        [userId, deviceId]
+                    );
+                } catch (err) {
+                    console.error('Background device cleanup failed:', err);
+                }
+            })();
+        }
+
+        successResponse(res, 'Logout successful');
+    } catch (error) {
+        console.error('Logout error:', error);
+        // Even if error, we send success to client to clear state
+        successResponse(res, 'Logout successful');
     }
 };
 
@@ -278,10 +326,11 @@ export const adminResetPassword = [
             const targetUser = userCheck.rows[0];
 
             // Hash new password
+            const passwordHash = await bcrypt.hash(trimmedPassword, 12);
 
             await query(
                 'UPDATE users SET password_hash = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-                [trimmedPassword, finalUserId]
+                [passwordHash, finalUserId]
             );
 
             console.log(`🔐 PASSWORD UPDATED: User ${targetUser.email} (ID: ${finalUserId}) result: SUCCESS`);
@@ -325,7 +374,7 @@ export const updateFcmToken = [
     async (req: Request, res: Response): Promise<void> => {
         try {
             const userId = req.user?.userId;
-            const { fcmToken } = req.body;
+            const { fcmToken, deviceId } = req.body;
 
             if (!fcmToken) {
                 console.warn('Update FCM: Missing token for user', userId);
@@ -333,14 +382,32 @@ export const updateFcmToken = [
                 return;
             }
 
-            console.log('Update FCM: Updating token for user:', userId);
+            console.log('Update FCM: Updating token for user:', userId, 'Device:', deviceId || 'Legacy');
 
-            await query(
-                'UPDATE users SET fcm_token = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-                [fcmToken, userId]
-            );
+            if (deviceId) {
+                // Async update to user_devices (New App Flow)
+                (async () => {
+                    try {
+                        await query(
+                            `INSERT INTO user_devices (user_id, device_id, fcm_token, last_active)
+                             VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                             ON CONFLICT (user_id, device_id) 
+                             DO UPDATE SET fcm_token = EXCLUDED.fcm_token, last_active = CURRENT_TIMESTAMP`,
+                            [userId, deviceId, fcmToken]
+                        );
+                    } catch (err) {
+                        console.error('Background FCM update failed:', err);
+                    }
+                })();
+            } else {
+                // Legacy App Flow: Update users table directly
+                // This ensures old apps continue to work (single device mode for them)
+                await query(
+                    'UPDATE users SET fcm_token = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+                    [fcmToken, userId]
+                );
+            }
 
-            console.log('Update FCM: Success for user:', userId);
             successResponse(res, 'FCM token updated successfully');
         } catch (error) {
             console.error('Update FCM token error:', error);
@@ -355,11 +422,16 @@ export const checkFcmToken = [
     async (req: Request, res: Response): Promise<void> => {
         try {
             const userId = req.user?.userId;
-            console.log(userId);
+            const { deviceId } = req.query;
+
+            if (!deviceId) {
+                errorResponse(res, 'Device ID required', 400);
+                return;
+            }
 
             const result = await query(
-                'SELECT fcm_token FROM users WHERE id = $1',
-                [userId]
+                'SELECT fcm_token FROM user_devices WHERE user_id = $1 AND device_id = $2',
+                [userId, deviceId]
             );
 
             const hasToken = !!(result.rows[0]?.fcm_token);

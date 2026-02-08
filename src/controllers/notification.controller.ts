@@ -47,19 +47,28 @@ export const getMyNotifications = async (req: Request, res: Response): Promise<v
 /**
  * Get all users who have FCM tokens (for admin testing panel)
  */
+/**
+ * Get all users who have FCM tokens (for admin testing panel)
+ */
 export const getUsersWithFcmToken = async (req: Request, res: Response): Promise<void> => {
     try {
-        // For testing: filter by specific user ID
-        const userId = "4e689e5c-dcbb-4ccb-8e0e-cf0a7c460ecb";
-
         const result = await query(
             `SELECT u.id, u.email, u.phone, u.role, u.fcm_token,
-                    up.first_name, up.last_name, up.photo_url
+                    up.first_name, up.last_name, up.photo_url,
+                    (
+                        SELECT COUNT(DISTINCT t.token)
+                        FROM (
+                            SELECT fcm_token as token FROM user_devices WHERE user_id = u.id
+                            UNION
+                            SELECT fcm_token as token FROM users WHERE id = u.id AND fcm_token IS NOT NULL AND fcm_token != ''
+                        ) t
+                    ) as device_count
              FROM users u
              LEFT JOIN user_profiles up ON u.id = up.user_id
-             WHERE u.id = $1 AND u.fcm_token IS NOT NULL AND u.fcm_token != ''
+             WHERE (u.fcm_token IS NOT NULL AND u.fcm_token != '') 
+                OR EXISTS (SELECT 1 FROM user_devices ud WHERE ud.user_id = u.id)
              ORDER BY u.role, up.first_name`,
-            [userId]
+            []
         );
 
         successResponse(res, 'Users with FCM tokens fetched', result.rows);
@@ -89,7 +98,7 @@ export const sendTestNotification = async (req: Request, res: Response): Promise
 
         const pushToken = userResult.rows[0]?.fcm_token;
         console.log(pushToken);
-        
+
 
         if (!pushToken) {
             errorResponse(res, 'User does not have a push token', 400);

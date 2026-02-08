@@ -13,42 +13,56 @@ export const processResultNotifications = async (examId: string, examName: strin
 
         if (classIds.length === 0) return;
 
-        // 2. Bulk fetch parents using View
+        // 2. Bulk fetch parents using View joined with user_devices AND legacy users table
         const parentsResult = await query(
-            `SELECT student_id, school_id, parent_user_id, fcm_token
-             FROM vw_student_primary_parents
-             WHERE current_class_id = ANY($1::uuid[]) 
-               AND student_status = 'active'`,
+            `
+            SELECT v.student_id, v.school_id, v.parent_user_id, ud.fcm_token
+            FROM vw_student_primary_parents v
+            JOIN user_devices ud ON v.parent_user_id = ud.user_id
+            WHERE v.current_class_id = ANY($1::uuid[]) 
+              AND v.student_status = 'active'
+              
+            UNION
+            
+            SELECT v.student_id, v.school_id, v.parent_user_id, u.fcm_token
+            FROM vw_student_primary_parents v
+            JOIN users u ON v.parent_user_id = u.id
+            WHERE v.current_class_id = ANY($1::uuid[]) 
+              AND v.student_status = 'active'
+              AND u.fcm_token IS NOT NULL
+            `,
             [classIds]
         );
-        console.log(JSON.stringify(parentsResult.rows));
-        
 
         if (parentsResult.rows.length === 0) return;
 
-        console.log(`Processing result notifications for ${parentsResult.rows.length} parents`);
+        console.log(`Processing result notifications for ${parentsResult.rows.length} devices`);
 
         const title = 'Exam Results Published';
         const message = `The results for ${examName} have been published. You can now view and download the marksheet from the app.`;
 
-        // 3. Bulk Insert into DB using Stored Procedure
-        const schoolIds = parentsResult.rows.map(r => r.school_id);
-        const parentUserIds = parentsResult.rows.map(r => r.parent_user_id);
+        // 3. Bulk Insert into DB (Unique parent users only)
+        const uniqueParents = new Map();
+        parentsResult.rows.forEach(r => {
+            if (!uniqueParents.has(r.parent_user_id)) {
+                uniqueParents.set(r.parent_user_id, { school_id: r.school_id, user_id: r.parent_user_id });
+            }
+        });
+
+        const schoolIds = Array.from(uniqueParents.values()).map((p: any) => p.school_id);
+        const parentUserIds = Array.from(uniqueParents.values()).map((p: any) => p.user_id);
 
         await query(
             `CALL sp_bulk_insert_notifications($1, $2, 'result', 'high', $3, $4::uuid[], $5::uuid[])`,
             [title, message, userId, schoolIds, parentUserIds]
         );
 
-        // 4. Send FCM in parallel
-        // 4. Prepare Expo messages
+        // 4. Send FCM (To all devices)
         const messages: any[] = [];
         for (const row of parentsResult.rows) {
-            if (!Expo.isExpoPushToken(row.fcm_token)) {
-                console.error(`Push token ${row.fcm_token} is not a valid Expo push token`);
+            if (!row.fcm_token || !Expo.isExpoPushToken(row.fcm_token)) {
                 continue;
             }
-            
 
             messages.push({
                 to: row.fcm_token,
@@ -72,15 +86,7 @@ export const processResultNotifications = async (examId: string, examName: strin
             }
         }
 
-        // 6. Check for errors
-        const errors = tickets.filter(ticket => ticket.status === 'error');
-        if (errors.length > 0) {
-            console.error('Errors in push tickets:', errors);
-        }
-
-        console.log(`Sent ${tickets.length} result notifications`);
-
-
+        console.log(`Sent ${tickets.length} result push notifications`);
 
     } catch (error) {
         console.error('Error in processResultNotifications:', error);

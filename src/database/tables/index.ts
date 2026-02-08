@@ -959,6 +959,24 @@ END $$;
 `;
 
 // ============================================
+// 24. USER DEVICES (New Migration)
+// ============================================
+export const addUserDevicesTable = () => `
+CREATE TABLE IF NOT EXISTS user_devices (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id VARCHAR(255) NOT NULL,
+  fcm_token TEXT,
+  last_active TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, device_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_devices_user ON user_devices(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_devices_token ON user_devices(fcm_token);
+`;
+
+// ============================================
 // ALL TABLES EXPORT
 // ============================================
 export const allTables = [
@@ -1003,4 +1021,5 @@ export const allTables = [
   { name: '21_student_missing_fields', sql: addStudentMissingFields },
   { name: '22_remove_email_constraint', sql: removeEmailConstraint },
   { name: '23_add_parent_columns', sql: addParentColumns },
+  { name: '24_add_user_devices', sql: addUserDevicesTable },
 ];

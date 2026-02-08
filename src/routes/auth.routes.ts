@@ -27,4 +27,7 @@ router.post('/update-permissions-admin', authController.updateUserPermissions);
 // GET /api/auth/check-fcm-token - Check if FCM token exists for user
 router.get('/check-fcm-token', authController.checkFcmToken);
 
+// POST /api/auth/logout - Logout user
+router.post('/logout', authController.logout);
+
 export default router;
