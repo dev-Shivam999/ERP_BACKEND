@@ -156,11 +156,9 @@ export const getStudentById = async (req: Request, res: Response): Promise<void>
 
         // Get parents
         const parentsResult = await query(
-            `SELECT p.*, up.first_name, up.last_name, u.phone, u.email, sp.relationship, sp.is_primary_contact, sp.guardian_relation
+            `SELECT p.*, sp.relationship, sp.is_primary_contact, sp.guardian_relation
        FROM student_parents sp
        JOIN parents p ON sp.parent_id = p.id
-       LEFT JOIN users u ON p.user_id = u.id
-       LEFT JOIN user_profiles up ON u.id = up.user_id
        WHERE sp.student_id = $1`,
             [id]
         );
@@ -196,23 +194,93 @@ export const createStudent = async (req: Request, res: Response): Promise<void> 
 
 
         const result = await transaction(async (client) => {
-            // Generate admission number
             const year = new Date().getFullYear();
-            const admissionResult = await client.query(
+
+            // 1. Parallel: Generate ID and Resolve Class/Section
+            const admissionNumberPromise = client.query(
                 `SELECT sp_generate_student_id($1, $2) as admission_number`,
                 [schoolId, year]
             );
-            const admissionNumber = admissionResult.rows[0].admission_number;
+
+            const classSectionPromise = (async () => {
+                // Determine class name (currentClass takes priority, then className)
+                const actualClassName = currentClass || className;
+
+                // Find or create class
+                let classId;
+                const classResult = await client.query(
+                    `SELECT id FROM classes WHERE school_id = $1 AND name = $2`,
+                    [schoolId, actualClassName]
+                );
+
+                if (classResult.rows.length > 0) {
+                    classId = classResult.rows[0].id;
+                } else {
+                    // Parse numeric value from class name
+                    let numericValue = 0;
+                    if (actualClassName.toLowerCase().includes('nursery')) numericValue = -2;
+                    else if (actualClassName.toLowerCase().includes('lkg')) numericValue = -1;
+                    else if (actualClassName.toLowerCase().includes('ukg')) numericValue = 0;
+                    else {
+                        const match = actualClassName.match(/\d+/);
+                        if (match) numericValue = parseInt(match[0]);
+                    }
+
+                    const newClass = await client.query(
+                        `INSERT INTO classes (school_id, name, numeric_value, display_order)
+                         VALUES ($1, $2, $3, $3) RETURNING id`,
+                        [schoolId, actualClassName, numericValue]
+                    );
+                    classId = newClass.rows[0].id;
+                }
+
+                // Find or create joining class (if different from current)
+                let admissionClassId = classId;
+                if (joiningClass && joiningClass !== actualClassName) {
+                    const jClassResult = await client.query(
+                        `SELECT id FROM classes WHERE school_id = $1 AND name = $2`,
+                        [schoolId, joiningClass]
+                    );
+                    if (jClassResult.rows.length > 0) {
+                        admissionClassId = jClassResult.rows[0].id;
+                    }
+                }
+
+                // Find or create section
+                let sectionId;
+                const sectionResult = await client.query(
+                    `SELECT id FROM sections WHERE class_id = $1 AND name = $2`,
+                    [classId, sectionName || 'A']
+                );
+
+                if (sectionResult.rows.length > 0) {
+                    sectionId = sectionResult.rows[0].id;
+                } else {
+                    const newSection = await client.query(
+                        `INSERT INTO sections (class_id, name) VALUES ($1, $2) RETURNING id`,
+                        [classId, sectionName || 'A']
+                    );
+                    sectionId = newSection.rows[0].id;
+                }
+
+                return { classId, admissionClassId, sectionId };
+            })();
+
+            const [admissionRes, classSectionRes] = await Promise.all([
+                admissionNumberPromise,
+                classSectionPromise
+            ]);
+
+            const admissionNumber = admissionRes.rows[0].admission_number;
+            const { classId, admissionClassId, sectionId } = classSectionRes;
 
             // Auto-generate password from admission number
-            const bcrypt = require('bcryptjs');
             const defaultPassword = admissionNumber;
-            // const passwordHash = await bcrypt.hash(defaultPassword, 12);
 
             // Generate email if not provided
             const userEmail = email || `${admissionNumber.toLowerCase()}@student.school.local`;
 
-            // Create user
+            // 2. Create User and Profile
             const userResult = await client.query(
                 `INSERT INTO users (school_id, email, password_hash, phone, role)
                  VALUES ($1, $2, $3, $4, 'student')
@@ -221,72 +289,13 @@ export const createStudent = async (req: Request, res: Response): Promise<void> 
             );
             const userId = userResult.rows[0].id;
 
-            // Create profile with all details
             await client.query(
                 `INSERT INTO user_profiles (user_id, first_name, middle_name, last_name, gender, date_of_birth, blood_group, aadhar_number, address, city, state, pincode, alternate_phone)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
                 [userId, firstName, middleName || null, lastName || '', gender || null, dateOfBirth || null, bloodGroup || null, aadharNumber || null, address || null, city || null, state || null, pincode || null, alternatePhone || null]
             );
 
-            // Determine class name (currentClass takes priority, then className)
-            const actualClassName = currentClass || className;
-
-            // Find or create class
-            let classId;
-            const classResult = await client.query(
-                `SELECT id FROM classes WHERE school_id = $1 AND name = $2`,
-                [schoolId, actualClassName]
-            );
-            if (classResult.rows.length > 0) {
-                classId = classResult.rows[0].id;
-            } else {
-                // Parse numeric value from class name
-                let numericValue = 0;
-                if (actualClassName.toLowerCase().includes('nursery')) numericValue = -2;
-                else if (actualClassName.toLowerCase().includes('lkg')) numericValue = -1;
-                else if (actualClassName.toLowerCase().includes('ukg')) numericValue = 0;
-                else {
-                    const match = actualClassName.match(/\d+/);
-                    if (match) numericValue = parseInt(match[0]);
-                }
-
-                const newClass = await client.query(
-                    `INSERT INTO classes (school_id, name, numeric_value, display_order)
-                     VALUES ($1, $2, $3, $3) RETURNING id`,
-                    [schoolId, actualClassName, numericValue]
-                );
-                classId = newClass.rows[0].id;
-            }
-
-            // Find or create joining class (if different from current)
-            let admissionClassId = classId;
-            if (joiningClass && joiningClass !== actualClassName) {
-                const jClassResult = await client.query(
-                    `SELECT id FROM classes WHERE school_id = $1 AND name = $2`,
-                    [schoolId, joiningClass]
-                );
-                if (jClassResult.rows.length > 0) {
-                    admissionClassId = jClassResult.rows[0].id;
-                }
-            }
-
-            // Find or create section
-            let sectionId;
-            const sectionResult = await client.query(
-                `SELECT id FROM sections WHERE class_id = $1 AND name = $2`,
-                [classId, sectionName || 'A']
-            );
-            if (sectionResult.rows.length > 0) {
-                sectionId = sectionResult.rows[0].id;
-            } else {
-                const newSection = await client.query(
-                    `INSERT INTO sections (class_id, name) VALUES ($1, $2) RETURNING id`,
-                    [classId, sectionName || 'A']
-                );
-                sectionId = newSection.rows[0].id;
-            }
-
-            // Create student with all fields
+            // 3. Create student with all fields
             const studentResult = await client.query(
                 `INSERT INTO students (
                     user_id, admission_number, admission_class_id, current_class_id, section_id,
@@ -306,45 +315,44 @@ export const createStudent = async (req: Request, res: Response): Promise<void> 
                 ]
             );
 
-            // Create parent records if names provided
+            const studentId = studentResult.rows[0].id;
+
+            // 4. Create parent records in parallel
             const createParent = async (name: string, relationship: string, isPrimary: boolean = false, relationDetail: string = '') => {
                 if (!name) return null;
-                // const bcrypt = require('bcryptjs');
-                // const passwordHash = await bcrypt.hash('parent123', 12);
-                const parentEmail = `${relationship}.${admissionNumber.toLowerCase()}@school.local`;
-                const parentUser = await client.query(
-                    `INSERT INTO users (school_id, email, password_hash, role) VALUES ($1, $2, $3, 'parent') RETURNING id`,
-                    [schoolId, parentEmail, 'parent123']
-                );
-                const pUserId = parentUser.rows[0].id;
 
-                await client.query(
-                    `INSERT INTO user_profiles (user_id, first_name) VALUES ($1, $2)`,
-                    [pUserId, name]
-                );
+                const nameParts = name.trim().split(' ');
+                const firstName = nameParts[0];
+                const lastName = nameParts.slice(1).join(' ') || '';
 
+                // Insert directly into parents table
                 const pResult = await client.query(
-                    `INSERT INTO parents (user_id) VALUES ($1) RETURNING id`,
-                    [pUserId]
+                    `INSERT INTO parents (first_name, last_name, phone, email) 
+                     VALUES ($1, $2, $3, $4) 
+                     RETURNING id`,
+                    [firstName, lastName, phone || null, email || null]
                 );
                 const pId = pResult.rows[0].id;
 
                 await client.query(
                     `INSERT INTO student_parents (student_id, parent_id, relationship, is_primary_contact, guardian_relation)
                      VALUES ($1, $2, $3, $4, $5)`,
-                    [studentResult.rows[0].id, pId, relationship, isPrimary, relationDetail || null]
+                    [studentId, pId, relationship, isPrimary, relationDetail || null]
                 );
                 return pId;
             };
 
-            await createParent(fatherName, 'father', true);
-            await createParent(motherName, 'mother', false);
+            const parentPromises = [];
+            if (fatherName) parentPromises.push(createParent(fatherName, 'father', true));
+            if (motherName) parentPromises.push(createParent(motherName, 'mother', false));
             if (guardianName && guardianName !== fatherName && guardianName !== motherName) {
-                await createParent(guardianName, 'guardian', false, guardianRelation);
+                parentPromises.push(createParent(guardianName, 'guardian', false, guardianRelation));
             }
 
+            await Promise.all(parentPromises);
+
             return {
-                id: studentResult.rows[0].id,
+                id: studentId,
                 admissionNumber,
                 userId,
                 defaultPassword: admissionNumber,
@@ -411,8 +419,11 @@ export const updateStudent = async (req: Request, res: Response): Promise<void> 
                 }
             }
 
-            // Update student
-            await client.query(
+            // Update student and profile in parallel
+            const updates = [];
+
+            // 1. Update Students Table
+            updates.push(client.query(
                 `UPDATE students SET
                   current_class_id = COALESCE($2, current_class_id),
                   section_id = COALESCE($3, section_id),
@@ -442,111 +453,112 @@ export const updateStudent = async (req: Request, res: Response): Promise<void> 
                     data.status,
                     data.installmentPlanId || null
                 ]
-            );
+            ));
 
-            // Update profile
-            const studentData = await client.query('SELECT user_id, admission_number FROM students WHERE id = $1', [id]);
-            if (studentData.rows.length > 0) {
-                const userId = studentData.rows[0].user_id;
-                const admissionNumber = studentData.rows[0].admission_number;
+            // 2. Update Profile & User Phone
+            const profileUpdatePromise = (async () => {
+                const studentData = await client.query('SELECT user_id FROM students WHERE id = $1', [id]);
+                if (studentData.rows.length > 0) {
+                    const userId = studentData.rows[0].user_id;
 
-                await client.query(
-                    `UPDATE user_profiles SET
-            first_name = COALESCE($2, first_name),
-            last_name = COALESCE($3, last_name),
-            middle_name = COALESCE($12, middle_name),
-            alternate_phone = COALESCE($13, alternate_phone),
-            gender = COALESCE($4, gender),
-            date_of_birth = COALESCE($5, date_of_birth),
-            blood_group = COALESCE($6, blood_group),
-            aadhar_number = COALESCE($7, aadhar_number),
-            address = COALESCE($8, address),
-            city = COALESCE($9, city),
-            state = COALESCE($10, state),
-            pincode = COALESCE($11, pincode),
-            updated_at = CURRENT_TIMESTAMP
-           WHERE user_id = $1`,
-                    [
-                        userId,
-                        data.firstName, data.lastName, data.gender || null,
-                        data.dateOfBirth || null, data.bloodGroup || null, data.aadharNumber || null,
-                        data.address || null, data.city || null, data.state || null, data.pincode || null,
-                        data.middleName || null, data.alternatePhone || null
-                    ]
-                );
-
-                // Update phone in users table
-                if (data.phone) {
                     await client.query(
-                        `UPDATE users SET phone = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-                        [userId, data.phone]
+                        `UPDATE user_profiles SET
+                            first_name = COALESCE($2, first_name),
+                            last_name = COALESCE($3, last_name),
+                            middle_name = COALESCE($12, middle_name),
+                            alternate_phone = COALESCE($13, alternate_phone),
+                            gender = COALESCE($4, gender),
+                            date_of_birth = COALESCE($5, date_of_birth),
+                            blood_group = COALESCE($6, blood_group),
+                            aadhar_number = COALESCE($7, aadhar_number),
+                            address = COALESCE($8, address),
+                            city = COALESCE($9, city),
+                            state = COALESCE($10, state),
+                            pincode = COALESCE($11, pincode),
+                            updated_at = CURRENT_TIMESTAMP
+                           WHERE user_id = $1`,
+                        [
+                            userId,
+                            data.firstName, data.lastName, data.gender || null,
+                            data.dateOfBirth || null, data.bloodGroup || null, data.aadharNumber || null,
+                            data.address || null, data.city || null, data.state || null, data.pincode || null,
+                            data.middleName || null, data.alternatePhone || null
+                        ]
                     );
-                }
 
-                // Handle Parent updates (Father/Mother/Guardian)
-                const updateParent = async (name: string, relationship: string, relationDetail: string = '') => {
-                    if (!name) return;
-
-                    // Check if parent exists
-                    const existingParent = await client.query(
-                        `SELECT p.id, up.user_id 
-                         FROM student_parents sp
-                         JOIN parents p ON sp.parent_id = p.id
-                         JOIN users u ON p.user_id = u.id
-                         JOIN user_profiles up ON u.id = up.user_id
-                         WHERE sp.student_id = $1 AND sp.relationship = $2`,
-                        [id, relationship]
-                    );
-
-                    if (existingParent.rows.length > 0) {
-                        // Update existing
+                    // Update phone in users table
+                    if (data.phone) {
                         await client.query(
-                            `UPDATE user_profiles SET first_name = $2, updated_at = CURRENT_TIMESTAMP WHERE user_id = $1`,
-                            [existingParent.rows[0].user_id, name]
-                        );
-                        // Update relation detail if guardian
-                        if (relationship === 'guardian' && relationDetail) {
-                            await client.query(
-                                `UPDATE student_parents SET guardian_relation = $2 WHERE student_id = $1 AND relationship = 'guardian'`,
-                                [id, relationDetail]
-                            );
-                        }
-                    } else {
-                        // Create new (similar to create logic but simplified)
-                        // ... (Reusing logic or just skipping strict new creation for now as typically updates don't add new parents entirely from scratch without more info, but let's keep it safe)
-                        // For brevity in this edit, assuming critical updates are on existing or main fields. 
-                        // To properly support adding NEW parents during update, we needs the full create logic.
-                        // But for now, let's at least support updating the Name.
-
-                        // If we want to support adding, we copy the create logic:
-                        const bcrypt = require('bcryptjs');
-                        const passwordHash = await bcrypt.hash('parent123', 12);
-                        const parentEmail = `${relationship}.${admissionNumber.toLowerCase()}@school.local`; // admissionNumber from outer scope
-                        const parentUser = await client.query(
-                            `INSERT INTO users (school_id, email, password_hash, role) VALUES ($1, $2, $3, 'parent') RETURNING id`,
-                            [schoolId, parentEmail, passwordHash]
-                        );
-                        const parentUserId = parentUser.rows[0].id;
-                        await client.query(
-                            `INSERT INTO user_profiles (user_id, first_name) VALUES ($1, $2)`,
-                            [parentUserId, name]
-                        );
-                        const parentRecord = await client.query(
-                            `INSERT INTO parents (user_id) VALUES ($1) RETURNING id`,
-                            [parentUserId]
-                        );
-                        await client.query(
-                            `INSERT INTO student_parents (student_id, parent_id, relationship, is_primary_contact, guardian_relation)
-                             VALUES ($1, $2, $3, $4, $5)`,
-                            [id, parentRecord.rows[0].id, relationship, relationship === 'father', relationDetail || null]
+                            `UPDATE users SET phone = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+                            [userId, data.phone]
                         );
                     }
-                };
+                }
+            })();
+            updates.push(profileUpdatePromise);
 
-                await updateParent(data.fatherName, 'father');
-                await updateParent(data.motherName, 'mother');
-                await updateParent(data.guardianName, 'guardian', data.guardianRelation);
-            }
+            // 3. Update Parents in Parallel
+            const updateParent = async (name: string, relationship: string, relationDetail: string = '') => {
+                if (!name) return;
+
+                // Check if parent exists
+                const existingParent = await client.query(
+                    `SELECT p.id
+                         FROM student_parents sp
+                         JOIN parents p ON sp.parent_id = p.id
+                         WHERE sp.student_id = $1 AND sp.relationship = $2`,
+                    [id, relationship]
+                );
+
+                if (existingParent.rows.length > 0) {
+                    // Update existing
+                    const nameParts = name.trim().split(' ');
+                    const firstName = nameParts[0];
+                    const lastName = nameParts.slice(1).join(' ') || '';
+
+                    await client.query(
+                        `UPDATE parents SET first_name = $2, last_name = $3 WHERE id = $1`,
+                        [existingParent.rows[0].id, firstName, lastName]
+                    );
+
+                    // Update relation detail if guardian
+                    if (relationship === 'guardian' && relationDetail) {
+                        await client.query(
+                            `UPDATE student_parents SET guardian_relation = $2 WHERE student_id = $1 AND relationship = 'guardian'`,
+                            [id, relationDetail]
+                        );
+                    }
+                } else {
+                    // Create new parent (Simplified for update)
+                    const nameParts = name.trim().split(' ');
+                    const firstName = nameParts[0];
+                    const lastName = nameParts.slice(1).join(' ') || '';
+
+                    const pResult = await client.query(
+                        `INSERT INTO parents (first_name, last_name, phone, email) 
+                         VALUES ($1, $2, $3, null) 
+                         RETURNING id`,
+                        [firstName, lastName, null] // Phone isn't usually updated via single field for parents here
+                    );
+                    const pId = pResult.rows[0].id;
+
+                    await client.query(
+                        `INSERT INTO student_parents (student_id, parent_id, relationship, is_primary_contact, guardian_relation)
+                             VALUES ($1, $2, $3, $4, $5)`,
+                        [id, pId, relationship, relationship === 'father', relationDetail || null]
+                    );
+                }
+            };
+
+            const parentUpdates = [];
+            if (data.fatherName) parentUpdates.push(updateParent(data.fatherName, 'father'));
+            if (data.motherName) parentUpdates.push(updateParent(data.motherName, 'mother'));
+            if (data.guardianName) parentUpdates.push(updateParent(data.guardianName, 'guardian', data.guardianRelation));
+
+            updates.push(...parentUpdates);
+
+            // Execute all updates
+            await Promise.all(updates);
         });
 
         // Fetch updated student data to return

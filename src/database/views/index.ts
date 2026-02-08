@@ -184,13 +184,12 @@ SELECT
     s.current_class_id,
     s.status as student_status,
     u.school_id, 
-    p.user_id as parent_user_id, 
-    COALESCE(pu.fcm_token, u.fcm_token) as fcm_token
+    u.id as parent_user_id, 
+    u.fcm_token as fcm_token
 FROM students s
 JOIN users u ON s.user_id = u.id
 JOIN student_parents sp ON s.id = sp.student_id AND sp.is_primary_contact = true
-JOIN parents p ON sp.parent_id = p.id
-LEFT JOIN users pu ON p.user_id = pu.id;
+JOIN parents p ON sp.parent_id = p.id;
 `;
 
 // ============================================

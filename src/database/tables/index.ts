@@ -180,9 +180,14 @@ CREATE TABLE IF NOT EXISTS students (
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+
 CREATE TABLE IF NOT EXISTS parents (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  first_name VARCHAR(100),
+  last_name VARCHAR(100),
+  email VARCHAR(255),
+  phone VARCHAR(20),
   occupation VARCHAR(100),
   annual_income DECIMAL(12, 2),
   office_address TEXT,
@@ -195,12 +200,14 @@ CREATE TABLE IF NOT EXISTS student_parents (
   parent_id UUID NOT NULL REFERENCES parents(id) ON DELETE CASCADE,
   relationship parent_relation NOT NULL,
   is_primary_contact BOOLEAN DEFAULT false,
+  guardian_relation VARCHAR(100),
   UNIQUE(student_id, parent_id)
 );
 
 CREATE INDEX idx_students_admission_number ON students(admission_number);
 CREATE INDEX idx_students_class_section ON students(current_class_id, section_id);
 CREATE INDEX idx_students_category ON students(category);
+
 `;
 
 // ============================================
@@ -931,6 +938,27 @@ END $$;
 `;
 
 // ============================================
+// 23. ADD PARENT COLUMNS (New Migration)
+// ============================================
+export const addParentColumns = () => `
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='parents' AND column_name='first_name') THEN
+        ALTER TABLE parents ADD COLUMN first_name VARCHAR(100);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='parents' AND column_name='last_name') THEN
+        ALTER TABLE parents ADD COLUMN last_name VARCHAR(100);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='parents' AND column_name='email') THEN
+        ALTER TABLE parents ADD COLUMN email VARCHAR(255);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='parents' AND column_name='phone') THEN
+        ALTER TABLE parents ADD COLUMN phone VARCHAR(20);
+    END IF;
+END $$;
+`;
+
+// ============================================
 // ALL TABLES EXPORT
 // ============================================
 export const allTables = [
@@ -974,4 +1002,5 @@ export const allTables = [
   { name: '20_dashboard_indexes', sql: addDashboardIndexes },
   { name: '21_student_missing_fields', sql: addStudentMissingFields },
   { name: '22_remove_email_constraint', sql: removeEmailConstraint },
+  { name: '23_add_parent_columns', sql: addParentColumns },
 ];
