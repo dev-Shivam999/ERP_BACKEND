@@ -769,3 +769,128 @@ export const getExamStudentsStatus = async (req: Request, res: Response): Promis
         errorResponse(res, 'Failed to fetch student status', 500);
     }
 };
+
+// Get Batch Admit Cards (For Bulk Print)
+export const getBatchAdmitCards = async (req: Request, res: Response): Promise<void> => {
+    try {
+        const { id } = req.params; // Exam ID
+        const { classId } = req.query;
+        const schoolId = req.user?.schoolId;
+
+        // 1. Get Exam Details
+        const examRes = await query(
+            `SELECT e.*, s.name as school_name, s.address as school_address, s.logo_url as school_logo
+             FROM exams e
+             JOIN schools s ON e.school_id = s.id
+             WHERE e.id = $1 AND e.school_id = $2`,
+            [id, schoolId]
+        );
+
+        if (examRes.rows.length === 0) {
+            errorResponse(res, 'Exam not found', 404);
+            return;
+        }
+
+        const exam = examRes.rows[0];
+
+        // 2. Build Query for Students with Issued Admit Cards
+        let queryStr = `
+            SELECT s.id, s.admission_number, s.roll_number,
+                   up.first_name || ' ' || COALESCE(up.last_name, '') as student_name,
+                   c.name as class_name, sec.name as section_name,
+                   (SELECT up2.first_name || ' ' || COALESCE(up2.last_name, '') 
+                    FROM parents p 
+                    JOIN student_parents sp ON p.id = sp.parent_id
+                    JOIN users u2 ON p.user_id = u2.id
+                    JOIN user_profiles up2 ON u2.id = up2.user_id
+                    WHERE sp.student_id = s.id AND sp.relationship = 'father' LIMIT 1) as father_name
+            FROM admit_cards ac
+            JOIN students s ON ac.student_id = s.id
+            JOIN users u ON s.user_id = u.id
+            JOIN user_profiles up ON u.id = up.user_id
+            JOIN classes c ON s.current_class_id = c.id
+            JOIN sections sec ON s.section_id = sec.id
+            WHERE ac.exam_id = $1 AND ac.status = 'issued'
+        `;
+
+        const queryParams: any[] = [id];
+
+        if (classId) {
+            const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(classId as string);
+            if (isUUID) {
+                queryStr += ` AND s.current_class_id = $${queryParams.length + 1}`;
+            } else {
+                queryStr += ` AND s.current_class_id = $${queryParams.length + 1}`;
+            }
+            queryParams.push(classId);
+        }
+
+        queryStr += ` ORDER BY c.name, sec.name, s.roll_number, up.first_name`;
+
+        const studentsRes = await query(queryStr, queryParams);
+        const students = studentsRes.rows;
+
+        const scheduleRes = await query(
+            `SELECT es.class_id, sub.name as subject_name, es.exam_date, es.start_time, es.end_time
+             FROM exam_schedules es
+             JOIN subjects sub ON es.subject_id = sub.id
+             WHERE es.exam_id = $1
+             ORDER BY es.exam_date, es.start_time`,
+            [id]
+        );
+
+        const schedulesByClass: any = {};
+        scheduleRes.rows.forEach(row => {
+            if (!schedulesByClass[row.class_id]) {
+                schedulesByClass[row.class_id] = [];
+            }
+            schedulesByClass[row.class_id].push(row);
+        });
+
+        const admitCards = students.map(student => ({
+            student,
+            exam,
+            schedule: schedulesByClass[student.class_id] || []
+        }));
+
+        queryStr = `
+            SELECT s.id, s.admission_number, s.roll_number, s.current_class_id as class_id,
+                   up.first_name || ' ' || COALESCE(up.last_name, '') as student_name,
+                   c.name as class_name, sec.name as section_name,
+                   (SELECT up2.first_name || ' ' || COALESCE(up2.last_name, '') 
+                    FROM parents p 
+                    JOIN student_parents sp ON p.id = sp.parent_id
+                    JOIN users u2 ON p.user_id = u2.id
+                    JOIN user_profiles up2 ON u2.id = up2.user_id
+                    WHERE sp.student_id = s.id AND sp.relationship = 'father' LIMIT 1) as father_name
+            FROM admit_cards ac
+            JOIN students s ON ac.student_id = s.id
+            JOIN users u ON s.user_id = u.id
+            JOIN user_profiles up ON u.id = up.user_id
+            JOIN classes c ON s.current_class_id = c.id
+            JOIN sections sec ON s.section_id = sec.id
+            WHERE ac.exam_id = $1 AND ac.status = 'issued'
+        `;
+
+        if (classId) {
+            queryStr += ` AND s.current_class_id = $${queryParams.length + 1}`;
+            // queryParams already has classId at index 1 (length 2) if we didn't reset it.
+            // Let's reset purely for clarity.
+        }
+
+        // Final Clean execution
+        const studentsResFinal = await query(queryStr, queryParams);
+
+        const finalAdmitCards = studentsResFinal.rows.map(student => ({
+            student,
+            exam,
+            schedule: schedulesByClass[student.class_id] || []
+        }));
+
+        successResponse(res, `Fetched ${finalAdmitCards.length} admit cards`, finalAdmitCards);
+
+    } catch (error) {
+        console.error('Get batch admit cards error:', error);
+        errorResponse(res, 'Failed to fetch batch admit cards', 500);
+    }
+};
