@@ -885,6 +885,51 @@ export const addDashboardIndexes = () => `
     CREATE INDEX IF NOT EXISTS idx_academic_years_current ON academic_years(school_id, is_current) WHERE is_current = true;
 `;
 
+
+// ============================================
+// 21. STUDENT MISSING FIELDS (New Migration)
+// ============================================
+export const addStudentMissingFields = () => `
+-- Add middle_name and alternate_phone to user_profiles
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='user_profiles' AND column_name='middle_name') THEN
+        ALTER TABLE user_profiles ADD COLUMN middle_name VARCHAR(100);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='user_profiles' AND column_name='alternate_phone') THEN
+        ALTER TABLE user_profiles ADD COLUMN alternate_phone VARCHAR(20);
+    END IF;
+END $$;
+
+-- Add installment_plan_id to students
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='students' AND column_name='installment_plan_id') THEN
+        ALTER TABLE students ADD COLUMN installment_plan_id UUID;
+    END IF;
+END $$;
+
+-- Add guardian_relation to student_parents
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='student_parents' AND column_name='guardian_relation') THEN
+        ALTER TABLE student_parents ADD COLUMN guardian_relation VARCHAR(50);
+    END IF;
+END $$;
+`;
+
+// ============================================
+// 22. REMOVE EMAIL CONSTRAINT
+// ============================================
+export const removeEmailConstraint = () => `
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_email_key') THEN
+        ALTER TABLE users DROP CONSTRAINT users_email_key;
+    END IF;
+END $$;
+`;
+
 // ============================================
 // ALL TABLES EXPORT
 // ============================================
@@ -927,4 +972,6 @@ export const allTables = [
   { name: '18_certificate_requests', sql: certificateRequests },
   { name: '19_calendar', sql: calendar },
   { name: '20_dashboard_indexes', sql: addDashboardIndexes },
+  { name: '21_student_missing_fields', sql: addStudentMissingFields },
+  { name: '22_remove_email_constraint', sql: removeEmailConstraint },
 ];
