@@ -859,36 +859,89 @@ export const deleteFeeType = async (req: Request, res: Response): Promise<void> 
 export const getCollectionsDetail = async (req: Request, res: Response): Promise<void> => {
     try {
         const schoolId = req.user?.schoolId;
-        const { type } = req.query; // 'today' or 'yearly'
+        const { type, startDate, endDate, classId, sectionId, feeTypeId } = req.query;
         const today = new Date().toISOString().split('T')[0];
 
+        let paramCounter = 1;
+        const queryParams: any[] = [schoolId];
+
         let dateClause = '';
-        if (type === 'today') {
-            dateClause = `AND fp.payment_date = '${today}'`;
+        let joinClause = '';
+
+        // Handle Date Filter
+        if (startDate && endDate) {
+            paramCounter++;
+            dateClause += ` AND fp.payment_date >= $${paramCounter}`;
+            queryParams.push(startDate);
+            paramCounter++;
+            dateClause += ` AND fp.payment_date <= $${paramCounter}`;
+            queryParams.push(endDate);
+        } else if (type === 'today') {
+            paramCounter++;
+            dateClause += ` AND fp.payment_date = $${paramCounter}`;
+            queryParams.push(today);
+        } else if (!startDate && !endDate && !type) {
+            paramCounter++;
+            dateClause += ` AND fp.payment_date = $${paramCounter}`;
+            queryParams.push(today);
         }
 
-        const result = await query(
-            `SELECT s.id as student_id, s.admission_number,
+        // Handle Class/Section/FeeType filters
+        if (classId) {
+            paramCounter++;
+            dateClause += ` AND s.current_class_id = $${paramCounter}`;
+            queryParams.push(classId);
+        }
+
+        if (sectionId) {
+            paramCounter++;
+            dateClause += ` AND s.section_id = $${paramCounter}`;
+            queryParams.push(sectionId);
+        }
+
+        if (feeTypeId) {
+            joinClause += ` JOIN fee_structures fs ON sf.fee_structure_id = fs.id`;
+            paramCounter++;
+            dateClause += ` AND fs.fee_type_id = $${paramCounter}`;
+            queryParams.push(feeTypeId);
+        }
+
+        const queryStr = `SELECT s.id as student_id, s.admission_number,
                     up.first_name || ' ' || COALESCE(up.last_name, '') as student_name,
                     c.name as class_name, sec.name as section_name,
                     u.phone,
                     SUM(fp.amount_paid) as amount_paid,
                     MAX(fp.payment_date) as last_payment_date,
-                    (SELECT sf2.status FROM student_fees sf2 
-                     WHERE sf2.student_id = s.id 
-                     ORDER BY sf2.year DESC, sf2.month DESC LIMIT 1) as current_status
+                    (CASE 
+                        WHEN EXISTS (
+                            SELECT 1 FROM student_fees sf2 
+                            ${feeTypeId ? 'JOIN fee_structures fs2 ON sf2.fee_structure_id = fs2.id' : ''}
+                            WHERE sf2.student_id = s.id 
+                            ${feeTypeId ? `AND fs2.fee_type_id = $${paramCounter}` : ''}
+                            AND (sf2.status IN ('pending', 'partial', 'overdue') OR sf2.amount_pending > 0)
+                        ) THEN 'partial' 
+                        ELSE 'paid' 
+                    END) as current_status,
+                    (SELECT COALESCE(SUM(sf3.amount_pending), 0) FROM student_fees sf3
+                     ${feeTypeId ? 'JOIN fee_structures fs3 ON sf3.fee_structure_id = fs3.id' : ''}
+                     WHERE sf3.student_id = s.id
+                     ${feeTypeId ? `AND fs3.fee_type_id = $${paramCounter}` : ''}
+                    ) as total_pending
              FROM fee_payments fp
              JOIN student_fees sf ON fp.student_fee_id = sf.id
+             ${joinClause}
              JOIN students s ON sf.student_id = s.id
              JOIN users u ON s.user_id = u.id
              JOIN user_profiles up ON u.id = up.user_id
              JOIN classes c ON s.current_class_id = c.id
              JOIN sections sec ON s.section_id = sec.id
              WHERE u.school_id = $1 ${dateClause}
-             GROUP BY s.id, s.admission_number, up.first_name, up.last_name, c.name, sec.name, u.phone
-             ORDER BY last_payment_date DESC`,
-            [schoolId]
-        );
+                GROUP BY s.id, s.admission_number, up.first_name, up.last_name, c.name, sec.name, u.phone
+             ORDER BY last_payment_date DESC`;
+
+
+
+        const result = await query(queryStr, queryParams);
 
         successResponse(res, 'Collections detail fetched', result.rows);
     } catch (error) {
@@ -901,6 +954,16 @@ export const getCollectionsDetail = async (req: Request, res: Response): Promise
 export const getPendingFeesDetail = async (req: Request, res: Response): Promise<void> => {
     try {
         const schoolId = req.user?.schoolId;
+
+        const { classId, sectionId } = req.query;
+        let filterClause = '';
+
+        if (classId) {
+            filterClause += ` AND s.current_class_id = '${classId}'`;
+        }
+        if (sectionId) {
+            filterClause += ` AND s.section_id = '${sectionId}'`;
+        }
 
         const result = await query(
             `SELECT s.id as student_id, s.admission_number,
@@ -921,7 +984,7 @@ export const getPendingFeesDetail = async (req: Request, res: Response): Promise
              JOIN classes c ON s.current_class_id = c.id
              JOIN sections sec ON s.section_id = sec.id
              LEFT JOIN student_fees sf ON s.id = sf.student_id
-             WHERE u.school_id = $1 AND s.status = 'active'
+             WHERE u.school_id = $1 AND s.status = 'active' ${filterClause}
              GROUP BY s.id, s.admission_number, up.first_name, up.last_name, c.id, c.name, sec.name, u.phone, c.monthly_fee_amount
              HAVING GREATEST(
                 COALESCE(

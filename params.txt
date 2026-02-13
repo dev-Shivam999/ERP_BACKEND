@@ -1,0 +1,10 @@
+{
+  "params": {
+    "type": "yearly",
+    "classId": "9cd28d5d-1731-4df3-9028-5ceb0312ed63",
+    "sectionId": "92d96e35-67f7-4858-95e2-66db1b7eb5fd",
+    "startDate": "2025-12-31",
+    "endDate": "2026-12-30"
+  },
+  "query": "SELECT s.id as student_id, s.admission_number,\n                    up.first_name || ' ' || COALESCE(up.last_name, '') as student_name,\n                    c.name as class_name, sec.name as section_name,\n                    u.phone,\n                    SUM(fp.amount_paid) as amount_paid,\n                    MAX(fp.payment_date) as last_payment_date,\n                    (SELECT sf2.status FROM student_fees sf2 \n                     WHERE sf2.student_id = s.id \n                     ORDER BY sf2.year DESC, sf2.month DESC LIMIT 1) as current_status\n             FROM fee_payments fp\n             JOIN student_fees sf ON fp.student_fee_id = sf.id\n             \n             JOIN students s ON sf.student_id = s.id\n             JOIN users u ON s.user_id = u.id\n             JOIN user_profiles up ON u.id = up.user_id\n             JOIN classes c ON s.current_class_id = c.id\n             JOIN sections sec ON s.section_id = sec.id\n             WHERE u.school_id = $1  AND fp.payment_date >= '2025-12-31' AND fp.payment_date <= '2026-12-30' AND s.current_class_id = '9cd28d5d-1731-4df3-9028-5ceb0312ed63' AND s.section_id = '92d96e35-67f7-4858-95e2-66db1b7eb5fd'\n             GROUP BY s.id, s.admission_number, up.first_name, up.last_name, c.name, sec.name, u.phone\n             ORDER BY last_payment_date DESC"
+}
